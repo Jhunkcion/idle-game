@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Emberhold — isometric idle fantasy RPG</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+  <div id="gameview">
+    <canvas id="cv"></canvas>
+    <div id="floaters"></div>
+
+    <!-- ── TOP BAR ───────────────────────────────────────── -->
+    <header id="topbar">
+      <div class="tgroup">
+        <div class="biglabel" id="ui-clock">06:00</div>
+        <div class="sublabel"><span id="ui-day">Day 1</span> · <span id="ui-season">Spring</span></div>
+        <div class="sublabel" id="ui-weather">Clear</div>
+        <div class="speedctl">
+          <button data-speed="0" title="Pause">❚❚</button>
+          <button data-speed="1" class="on" title="Normal">▶</button>
+          <button data-speed="2" title="Fast">▶▶</button>
+          <button data-speed="4" title="Very fast">▶▶▶</button>
+        </div>
+      </div>
+      <div class="tgroup resbar" id="ui-res"></div>
+      <div class="tgroup" id="ui-place">
+        <div class="biglabel" id="ui-placename">Emberhold</div>
+        <div class="sublabel" id="ui-placesub">The Ashen Vale</div>
+      </div>
+      <div class="tgroup nav">
+        <button data-panel="char" title="Character (C)">HERO</button>
+        <button data-panel="inv" title="Inventory (I)">BAG</button>
+        <button data-panel="build" title="Build (B)">BUILD</button>
+        <button data-panel="town" title="Town (T)">TOWN</button>
+        <button data-panel="quest" title="Quests (Q)">QUESTS</button>
+        <button data-panel="pet" title="Pets (P)">PETS</button>
+        <button data-panel="menu" title="Menu (Esc)">☰</button>
+      </div>
+    </header>
+
+    <!-- ── EVENT LOG ─────────────────────────────────────── -->
+    <div id="logbox">
+      <div class="loghead">TOWN CHRONICLE <span id="logtoggle">–</span></div>
+      <div id="log"></div>
+    </div>
+
+    <!-- ── BOTTOM BAR: player vitals + hotbar ────────────── -->
+    <footer id="bottombar">
+      <div id="vitals">
+        <div class="portrait" id="v-portrait"></div>
+        <div class="bars">
+          <div class="vname"><span id="v-name">Warden</span> <span id="v-lvl">Lv 1</span></div>
+          <div class="bar hp"><i id="v-hp"></i><b id="v-hpt"></b></div>
+          <div class="bar xp"><i id="v-xp"></i><b id="v-xpt"></b></div>
+        </div>
+      </div>
+      <div id="hotbar">
+        <button class="hk" data-act="skill1"><span class="k">1</span><span class="nm">Strike</span></button>
+        <button class="hk" data-act="skill2"><span class="k">2</span><span class="nm">Guard</span></button>
+        <button class="hk" data-act="potion"><span class="k">3</span><span class="nm">Potion</span><span class="ct" id="hb-pot">0</span></button>
+        <button class="hk" data-act="recall"><span class="k">R</span><span class="nm">Recall</span></button>
+        <button class="hk toggle" data-act="auto"><span class="k">F</span><span class="nm">Auto</span></button>
+      </div>
+      <div id="partybox"></div>
+    </footer>
+
+    <!-- ── CONTEXT HINT ──────────────────────────────────── -->
+    <div id="hint"></div>
+
+    <!-- ── TOASTS ────────────────────────────────────────── -->
+    <div id="toast"></div>
+
+    <!-- ── BUILD PLACEMENT BANNER ────────────────────────── -->
+    <div id="placebar">
+      <span id="placetext"></span>
+      <button id="placecancel" class="btn">CANCEL <span class="kb">Esc</span></button>
+    </div>
+
+    <!-- ── TOOLTIP ───────────────────────────────────────── -->
+    <div id="tooltip"></div>
+
+    <!-- ── PANELS ────────────────────────────────────────── -->
+    <div id="panels"></div>
+
+    <!-- ── DIALOGUE ──────────────────────────────────────── -->
+    <div id="dialogue" class="hidden"></div>
+
+    <!-- ── OFFLINE REPORT ────────────────────────────────── -->
+    <div id="offline" class="hidden"></div>
+  </div>
+</div>
+
+<script src="js/util.js"></script>
+<script src="js/data.js"></script>
+<script src="js/sprites.js"></script>
+<script src="js/world.js"></script>
+<script src="js/items.js"></script>
+<script src="js/npc.js"></script>
+<script src="js/build.js"></script>
+<script src="js/combat.js"></script>
+<script src="js/quests.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/render.js"></script>
+<script src="js/game.js"></script>
+<script src="js/testbench.js"></script> <!-- DEV ONLY: M1 test bench (F9). Not loaded by tools/smoke.js; delete with this line to remove. -->
+</body>
+</html>
