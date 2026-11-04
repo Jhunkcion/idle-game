@@ -54,8 +54,16 @@ EH.Build = (function () {
   }
 
   /* ── placement search ──────────────────────────────────────── */
+  /* Buildings belong to the VILLAGE, not to whatever map the Warden happens to
+     be standing on. Placement used to go through st.map, so opening the build
+     menu from inside the Hollowdeep stamped village footprints onto the dungeon
+     map — which knows nothing about the town's occupancy — and two buildings
+     could end up on the same tiles. Everything here goes through the town map. */
+  function mapOf(st) { return st.townMap || st.map; }
+
   function findSpot(st, type, near, rad) {
     const B = EH.BUILD[type];
+    const M = mapOf(st);
     rad = rad || 9;
     const cands = [];
     for (let r = 0; r <= rad; r++) {
@@ -65,16 +73,17 @@ EH.Build = (function () {
       }
     }
     cands.sort((p, q) => p.r - q.r);
-    for (const c of cands) if (st.map.canPlace(c.x, c.y, B.w, B.h)) return c;
-    for (let y = 3; y < st.map.h - 4; y++) for (let x = 3; x < st.map.w - 4; x++)
-      if (st.map.canPlace(x, y, B.w, B.h)) return { x, y };
+    for (const c of cands) if (M.canPlace(c.x, c.y, B.w, B.h)) return c;
+    for (let y = 3; y < M.h - 4; y++) for (let x = 3; x < M.w - 4; x++)
+      if (M.canPlace(x, y, B.w, B.h)) return { x, y };
     return null;
   }
 
   /* ── construct ─────────────────────────────────────────────── */
   function place(st, type, x, y, instant) {
     const B = EH.BUILD[type]; if (!B) return null;
-    if (!st.map.canPlace(x, y, B.w, B.h)) return null;
+    const M = mapOf(st);
+    if (!M.canPlace(x, y, B.w, B.h)) return null;
     if (!instant && !canAfford(st, B.cost)) return null;
     if (!instant) pay(st, B.cost);
     const b = {
@@ -83,7 +92,7 @@ EH.Build = (function () {
       acc: {}, workers: [], hp: 100, builtDay: st.time.day
     };
     st.buildings.push(b);
-    st.map.occupy(b);
+    M.occupy(b);
     st.stats.built++;
     if (type === "torch") st.town.lanterns = (st.town.lanterns || 0) + 1;
     if (!instant) {
@@ -110,7 +119,7 @@ EH.Build = (function () {
   }
   function demolish(st, b) {
     const i = st.buildings.indexOf(b); if (i < 0) return false;
-    st.map.vacate(b); st.buildings.splice(i, 1); refund(st, b);
+    mapOf(st).vacate(b); st.buildings.splice(i, 1); refund(st, b);
     for (const n of st.npcs) { if (n.home === b.id) n.home = null; if (n.work === b.id) { n.work = null; n.act = null; } }
     EH.log(`${EH.BUILD[b.type].n} demolished. 40% of materials recovered.`);
     return true;
@@ -348,7 +357,7 @@ EH.Build = (function () {
      STARTER TOWN LAYOUT
      ══════════════════════════════════════════════════════════════ */
   function setupTown(st) {
-    const m = st.map, C = Math.floor(m.w / 2);
+    const m = mapOf(st), C = Math.floor(m.w / 2);
     st.town.plaza = { x: C, y: C };
     st.buildings = [];
     const put = (type, x, y, lvl, instant) => {

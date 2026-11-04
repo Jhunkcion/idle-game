@@ -427,6 +427,16 @@ chk("monster AI moves and attacks", () => {
   if (!spot) throw new Error("no reachable tile near the monster");
   st.player.x = spot.x; st.player.y = spot.y; st.player.path = [];
   const atk0 = st.derived.atk; st.derived.atk = 0; // the tester does not fight back
+  /* §1.3 changed the ground rules here: the Warden is ALWAYS auto-fighting and
+     auto-exploring now (game.js autoWarden). Left alone it would snare, chip and
+     eventually kill the isolated monster and then wander off to the stairs, so
+     this check would measure the Warden's AI instead of the monster's. Silence
+     the Warden for the duration of the duel — no swings, no skills, no
+     exploring, no descending — and restore everything afterwards. */
+  const cd0 = st.derived.atkCd, autoT0 = st.player.autoT, stay0 = st.dungeon.stayOnFloor, pcd0 = Object.assign({}, st.player.cd);
+  st.derived.atkCd = 1e6; st.player.autoT = 1e6; st.dungeon.stayOnFloor = true;
+  const silence = () => { for (const sk of EH.CLASS[st.player.cls].skills) st.player.cd[sk.k] = 1e6; };
+  silence();
   /* ...and does not defend either. By this point the suite has the player near
      Lv90, so dodge and dmgReduce can swallow every swing and regen can erase a
      landed hit inside a single frame — which measures the tester's build, not
@@ -437,12 +447,14 @@ chk("monster AI moves and attacks", () => {
   let dealt = 0;
   for (let i = 0; i < 400; i++) {
     st.player.hp = st.derived.hpMax;               // immortal tester
+    silence();
     frames(1 / 30);
     if (st.map.kind !== "dungeon") throw new Error("tester was sent home mid-duel");
     if (st.player.hp < st.derived.hpMax) dealt++;
   }
   st.derived.atk = atk0;
   st.derived.dodge = d0; st.derived.dmgReduce = dr0; st.derived.regen = rg0;
+  st.derived.atkCd = cd0; st.player.autoT = autoT0; st.dungeon.stayOnFloor = stay0; st.player.cd = pcd0;
   const moved = Math.abs(m.x - x0) + Math.abs(m.y - y0);
   if (moved < 0.5) throw new Error("monster never moved");
   if (!dealt) throw new Error("monster never landed a hit");
@@ -1079,6 +1091,128 @@ chk("every job has a training profile (§6.1)", () => {
   return `${Object.keys(EH.JOB_TRAIN).length} profiles cover all ${jobs.size} jobs present`;
 });
 EH.Game.st = st;   // restore the main state for anything appended later
+
+/* ── 16. §1.3 NO DIRECT CONTROL + the two rendering/UI bugs from playtest ── */
+out("\n§1.3 NO DIRECT CONTROL (playtest feedback 1)\n");
+
+chk("held WASD / arrow keys cannot move the Warden one pixel", () => {
+  const s = EH.Game.newState("Hands-off", "warden", 90210);
+  EH.Game.st = s; EH.Game.setupWorld(false); EH.Render.snapCam(s);
+  /* Freeze every autonomous reason to move so the only possible movement would
+     come from the keyboard: no delve, no idle countdown, no stroll, no order. */
+  s.delve = false; s.idleT = -1e9; s.strollT = 1e9; s.recallT = 0;
+  s.pendingInteract = null; s.placing = null; s.player.path = [];
+  const x0 = s.player.x, y0 = s.player.y;
+  for (const k of ["w", "a", "s", "d", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]) __winDispatch("keydown", { key: k });
+  let autoOff = 0;
+  for (let i = 0; i < 600; i++) { EH.Game.update(1 / 60); if (!s.auto) autoOff++; }
+  for (const k of ["w", "a", "s", "d", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]) __winDispatch("keyup", { key: k });
+  const moved = Math.abs(s.player.x - x0) + Math.abs(s.player.y - y0);
+  if (moved > 1e-9) throw new Error(`10 s of held keys moved the Warden ${moved.toFixed(3)} tiles — §1.3 forbids direct control`);
+  if (autoOff) throw new Error(`st.auto was false on ${autoOff}/600 frames — the auto-Warden must never switch off`);
+  if (!EH.Game.st.auto) throw new Error("auto flag lost");
+  return "10 s of held WASD + arrows = 0.000 tiles moved · st.auto true on all 600 frames";
+});
+
+chk("clicking empty ground is not a walk order", () => {
+  const s = EH.Game.st;
+  s.delve = false; s.idleT = -1e9; s.strollT = 1e9; s.pendingInteract = null; s.player.path = [];
+  const x0 = s.player.x, y0 = s.player.y;
+  /* every walkable tile on the map, clicked through the public world-click path
+     where one exists — the contract is that none of them issues a move order */
+  const cv = document.querySelector("canvas");
+  if (!cv || !cv.dispatch) throw new Error("no canvas to click");
+  for (let i = 0; i < 40; i++) {
+    const sp = EH.Render.project(s.player.x + (i % 7) - 3, s.player.y + ((i / 7) | 0) - 3);
+    if (!sp) continue;
+    cv.dispatch("pointerdown", { button: 0, clientX: sp.x / (EH.Render.scale || 1), clientY: sp.y / (EH.Render.scale || 1) });
+    EH.Game.update(1 / 60);
+  }
+  if (s.player.path.length) throw new Error("a click on open ground queued a path — the Warden would walk off under its own steam");
+  const moved = Math.abs(s.player.x - x0) + Math.abs(s.player.y - y0);
+  if (moved > 1e-9) throw new Error(`ground clicks moved the Warden ${moved.toFixed(3)} tiles`);
+  return "40 clicks on open ground: no path queued, no movement";
+});
+
+chk("§1.3 the Warden plays itself — left alone in the village it delves on its own", () => {
+  const s = EH.Game.newState("Idlehands", "warden", 5150);
+  EH.Game.st = s; EH.Game.setupWorld(false); EH.Render.snapCam(s);
+  s.delve = false; s.idleT = 0; s.recallT = 0; s.strollT = 0; s.player.path = [];
+  const x0 = s.player.x, y0 = s.player.y;
+  let entered = -1, strolled = false, farthest = 0;
+  for (let i = 0; i < 60 * 120 && entered < 0; i++) {
+    EH.Game.update(1 / 60);
+    if (s.map.kind === "dungeon") { entered = i / 60; break; }
+    farthest = Math.max(farthest, Math.abs(s.player.x - x0) + Math.abs(s.player.y - y0));
+    if (farthest > 1.2) strolled = true;
+  }
+  if (entered < 0) throw new Error("120 s of no input and the Warden never reached the Hollowdeep — the loop stalls without a player");
+  if (!strolled) throw new Error("the Warden stood frozen in the village instead of staying visible and reachable");
+  return `descended unaided after ${entered.toFixed(0)} s (floor ${s.dungeon.floor}) · strolled up to ${farthest.toFixed(1)} tiles while waiting`;
+});
+
+out("\nRENDER + DIALOGUE (playtest feedback 2 & 3)\n");
+
+chk("ground is painted before anything with height — tiles can never cover a character", () => {
+  const s = EH.Game.st;
+  if (s.map.kind !== "town") { EH.Game.setupWorld(false); }
+  EH.Render.snapCam(s);
+  const ctx = EH.Render.ctx;
+  if (!ctx) throw new Error("renderer has no context");
+  /* Catalogue every ground-tile canvas this map can ask for, so each drawImage
+     can be classified as flat ground or something with height. */
+  const tiles = new Set();
+  for (const id of new Set(s.map.t)) for (let v = 0; v < 8; v++) { const c = EH.Art.tile(id, v); if (c) tiles.add(c); }
+  if (tiles.size < 4) throw new Error("only " + tiles.size + " tile canvases — cannot classify the draw order");
+  const seq = [];
+  const real = ctx.drawImage;
+  ctx.drawImage = function (img) { seq.push(tiles.has(img) ? "g" : "o"); return real.apply(this, arguments); };
+  try { EH.Render.draw(s, 1 / 60); } finally { ctx.drawImage = real; }
+  const g = seq.filter(c => c === "g").length, o = seq.length - g;
+  const lastGround = seq.lastIndexOf("g"), firstRaised = seq.indexOf("o");
+  if (!g) throw new Error("no ground was drawn at all");
+  if (!o) throw new Error("nothing with height was drawn — no buildings, props or characters on screen?");
+  if (lastGround > firstRaised) {
+    throw new Error(`${seq.slice(0, lastGround + 1).filter(c => c === "o").length} raised draw(s) happened before the last ground tile (index ${lastGround} of ${seq.length}) — the next diagonal's diamond would paint over a character's legs`);
+  }
+  return `${g} ground tiles then ${o} raised draws, strictly in that order`;
+});
+
+chk("dialogue options no longer re-roll every UI refresh (the Mara/Sylvie jitter)", () => {
+  const s = EH.Game.st;
+  for (const id of ["mara", "sylvie"]) {
+    const n = EH.NPCs.byId(s, id);
+    if (!n) throw new Error("no villager " + id);
+    n.quest = null; n.relP = 0;                       // the flickering case: no quest, low regard
+    const sig = () => EH.NPCs.options(n, s).map(o => o.k + o.act + o.label).join("|");
+    const first = sig();
+    for (let i = 0; i < 200; i++) if (sig() !== first) throw new Error(`${id}'s option list changed on call ${i} — it is re-rolling a random number on every refresh`);
+    EH.UI.dialogue(n);
+    const row = document.getElementById("dlg-opts");
+    if (!row || !row.children.length) throw new Error(id + ": dialogue produced no options");
+    const b0 = row.children[0];
+    for (let i = 0; i < 40; i++) { EH.Game.update(1 / 60); EH.UI.syncAll(); }
+    if (row.children[0] !== b0) throw new Error(`${id}: the option buttons were rebuilt under the cursor ${row.children.length}× — clicks would fall through`);
+    EH.UI.closeDialogue();
+  }
+  return "mara + sylvie: 200 identical option reads each, buttons untouched across 40 syncAll() ticks";
+});
+
+chk("a portrait canvas is never stolen out of a container it is already in", () => {
+  const def = EH.NPCDEF.find(d => d.id === "sylvie");
+  const a = EH.Art.portrait(def.look);
+  const hostA = new __El("div"); hostA.appendChild(a);
+  const b = EH.Art.portrait(def.look);
+  if (b === a) throw new Error("the same cached canvas was handed to two containers — appending it to the dialogue box would silently empty the villager roster");
+  const hostB = new __El("div"); hostB.appendChild(b);
+  if (hostA.children.length !== 1 || hostA.children[0] !== a) throw new Error("the first container lost its portrait");
+  if (hostB.children.length !== 1 || hostB.children[0] !== b) throw new Error("the second container lost its portrait");
+  /* and the cache must key on every field the drawing reads */
+  const short = EH.Art.portrait(Object.assign({}, def.look, { long: false, hat: null }));
+  const long = EH.Art.portrait(Object.assign({}, def.look, { long: true, hat: null }));
+  if (short === long) throw new Error("long hair and short hair share one cached portrait — the cache key is missing o.long");
+  return "two attached containers keep their own canvases · long/short hair cache separately";
+});
 
 /* ── result ─────────────────────────────────────────────────── */
 out("\n══ RESULT ══\n");

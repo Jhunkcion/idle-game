@@ -1092,7 +1092,7 @@ M1 signed off and implemented. **No system was built before FR-03 was proven**, 
 | **§10.5** | `offline` downtime field: zeroes output, decays on the game clock | `build.js` `efficiency`/`update` |
 | **D14** | Adventurers work at home at 65% | `build.js` `efficiency` |
 
-### Harness: 88 → 111 checks, all green, deterministic
+### Harness: 88 → 111 checks, all green, deterministic  *(116 after playtest round 1 — see Appendix D)*
 
 23 checks added for the above. The suite is now **byte-reproducible** — every `newState` in it is
 seeded, so a failure can be replayed exactly. That is FR-03 paying for itself immediately.
@@ -1121,3 +1121,121 @@ seeded, so a failure can be replayed exactly. That is FR-03 paying for itself im
 `wall` (Palisade) is tagged `cat: "legacy"`. §7.4 cuts tower-defence structures and §10.4 makes
 adventurers the only defence, so M2 must either repurpose it as decoration-terrain or remove it.
 It is tagged rather than deleted because removing it now would break existing saves for no M1 gain.
+
+---
+
+## Appendix D — Playtest round 1 (2026-11-03)
+
+The signed-off M1 build was played locally and came back with seven findings. Three were defects
+against already-locked design and are **fixed and harness-covered**; four are new scope and are
+**recorded here as pending decisions**, not as work done.
+
+### D.1 Fixed — the Warden was still on a joystick (§1.3)
+
+M1 shipped §1.3 half-implemented: the auto-battler existed but manual locomotion was still wired up
+alongside it, so the game was neither a watched simulation nor a controllable action game. The
+manual path is now gone:
+
+| Removed | Replaced by |
+|---|---|
+| WASD / arrow-key locomotion | The same keys **pan the camera** — looking around is the player's, moving is not |
+| Click-empty-ground free walk | Nothing. A click on open ground is not an order |
+| Click-monster manual approach | Clicking a monster sets `st.focus` only; the Warden closes the distance itself |
+| `F` auto-explore toggle | `F` = **Delve** — an order to descend, not a mode switch. `st.auto` is permanently `true` |
+
+Because there is no longer a hand on the wheel, the Warden had to become self-sufficient or the loop
+would stall the moment the player stopped clicking. `autoWarden()` (game.js) now, on a 0.35 s sim
+tick: drinks below 45 % HP, casts whatever is off cooldown (never re-casting a snare on an already
+snared target), and — in the village — strolls locally so it stays visible and every villager stays
+clickable-and-reachable, then walks to the Hollowdeep mouth and descends on its own after 40 s idle.
+A recall rests 8 s (60 s if downed) before the next descent, so a wipe cannot loop instantly.
+
+Interaction clicks are unchanged and remain the player's real verbs: talk to a villager, use a
+building, open a chest, take the stairs, enter the portal. All of them set an *intent*; the
+simulation does the walking.
+
+### D.2 Fixed — ground tiles painted over characters (§ P5 legibility)
+
+The renderer drew one diagonal at a time: that diagonal's tiles, then that diagonal's actors. The
+next diagonal's ground diamond has its top vertex ~8 px above the previous diagonal's actors' feet,
+so it landed on top of their legs — the exact artifact in the playtest screenshot.
+
+`draw()` is now two passes. **Pass 1** paints *only* flat ground and, while it is at it, files
+everything with height into depth buckets. **Pass 2** draws the buckets in diagonal order, and
+within a bucket draws terrain props → buildings → characters. Flat ground can therefore never
+occlude anything, while tall things still occlude each other correctly. Wall tiles also gained a
+proper top face (the side-face sprite never had one, so wall tops were showing background).
+
+### D.3 Fixed — Mara Loam's and Sylvie Thistle's dialogue boxes jittered
+
+Two independent causes, both specific to those two villagers because they are the ones with no
+service counter to anchor the option list:
+
+1. **The option row re-rolled itself ~8×/second.** `syncAll()` refreshes the open dialogue on a
+   0.12 s timer, and `NPCs.options()` decided whether to show *"Any work that needs doing?"* with a
+   fresh `EH.chance(0.5)` on **every call**. The row therefore blinked in and out, resizing the box,
+   and the buttons were destroyed and recreated under the cursor so clicks fell through. The coin
+   flip is now a stable per-villager hash, and `refreshDialogue()` rebuilds the row only when the
+   option signature actually changes. *This was also a determinism leak* — the UI was consuming the
+   seeded simulation rng from outside the sim step.
+2. **Portraits were stolen between containers.** `Art.portrait()` returns a *cached canvas element*,
+   and a DOM node has only one parent — so appending Sylvie's portrait to the dialogue box silently
+   lifted it out of the TOWN roster, and the roster's next refresh lifted it back, emptying the
+   dialogue box. Portraits now hand out the master canvas only while it is unattached and blit a
+   private copy otherwise. The cache key also omitted `long`/`eye`/`blush`, so long-haired and
+   short-haired villagers could share one face; and a `cap` was never drawn at all (Sylvie and Pip
+   wore one in the world and showed bare hair in the box). Both fixed.
+
+### D.4 Three latent bugs the fixes exposed
+
+Fixing D.1 meant the Warden now spends far more time in the dungeon unattended, which immediately
+detonated three pre-existing defects. All three are fixed:
+
+1. **Buildings could be placed on the wrong map.** `EH.Build.place/findSpot/remove` went through
+   `st.map`, i.e. *wherever the Warden currently stood*. Open the build menu from inside the
+   Hollowdeep and village footprints were stamped onto the dungeon map, whose occupancy grid knows
+   nothing about the town — two buildings could then occupy the same tiles. All building placement
+   now resolves through `EH.Build.mapOf(st) === st.townMap`, and `tryPlace()` refuses outright with
+   a toast when the Warden is not in the village.
+2. **A summoner could crash the frame after killing the Warden.** `monUpdate()` reads `st.dmap.floor`
+   when it rolls a summon, but the swing immediately before it can down the Warden — and being downed
+   calls `exitDungeon()`, which nulls `st.dmap` *while that function is still on the stack*. The
+   loop in `update()` re-checked the map between monsters; nothing re-checked inside one. Now
+   guarded, and summons read the durable `st.dungeon.floor`.
+3. **The renderer was drinking the seeded rng.** Rain recycling, particle bursts and screen shake
+   all called `EH.rand`, which is the *simulation* stream. Rendering runs at an arbitrary frame
+   rate, so any weather or hit effect shifted the game's random sequence. All of it now uses a
+   private visual-only xorshift (`EH.vrnd`) that never touches game state.
+
+### D.5 Harness: 111 → 116 checks, all green, still byte-identical
+
+Five new checks pin the round's fixes so they cannot silently regress:
+
+- held WASD/arrows move the Warden **0.000 tiles** over 10 s, and `st.auto` never goes false;
+- 40 clicks on open ground queue no path and move nothing;
+- left alone in the village with no input, the Warden **descends unaided** (~47 s on the pinned seed)
+  and strolls while it waits;
+- a full `Render.draw` is recorded through the canvas stub and every one of ~1270 ground-tile draws
+  must precede all ~350 raised draws;
+- Mara's and Sylvie's option lists are identical across 200 reads and their buttons survive 40
+  `syncAll()` ticks without being rebuilt; two attached containers keep two distinct portraits.
+
+Two existing checks were updated to the new rules rather than deleted: the monster-AI duel now
+explicitly *silences* the Warden (no swings, no skills, no exploring) because §1.3 means it would
+otherwise fight back and kill the monster under test; and `domstub.js` was made faithful about
+`appendChild` moving a node out of its previous parent, which is precisely the fidelity gap that
+let the portrait bug ship.
+
+### D.6 Pending — four findings that are new scope, not defects
+
+Recorded so they are not lost. Each needs a decision before M2 absorbs it:
+
+| # | Finding | Why it is scope, not a bug |
+|---|---|---|
+| 4 | Show a full continent map before starting; the player picks one available region | Adds a world layer *above* the current single map: continent data, region generation, a pre-game selection screen, and a save format that records the choice |
+| 5 | The chosen region must be **vast**, not just the village | The current town map *is* the whole region (46×46). A vast region implies village + hinterland: sub-locations, travel time, and a camera/minimap that can cope |
+| 6 | The dungeon entrance belongs **outside** the village boundary | Cheap on its own, but only meaningful once (5) exists — today "outside the village" and "outside the map" are the same place |
+| 7 | Travellers visit: trade, hang out in the tavern, can be recruited, can apply for citizenship | A new population class with its own lifecycle (arrival, stay, offer, acceptance), plus the first non-villager route into the roster and the first citizenship rule |
+
+4–7 together are a **world-layer re-architecture**, which is why they are being scoped as a unit
+rather than patched onto M1.

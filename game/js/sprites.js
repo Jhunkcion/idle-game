@@ -749,7 +749,7 @@ EH.Art = (function () {
      PORTRAIT (24×24 head shot for panels/dialogue)
      ═══════════════════════════════════════════════════════════ */
   function portrait(o) {
-    return cached(`pf_${[o.skin, o.hair, o.cloth, o.hat, o.hatc, o.beard, o.helmet, o.helmetc, o.cls, o.sex].join("|")}`, 24, 24, (x) => {
+    const master = cached(`pf_${[o.skin, o.hair, o.cloth, o.hat, o.hatc, o.beard, o.helmet, o.helmetc, o.cls, o.sex, o.long, o.eye, o.blush].join("|")}`, 24, 24, (x) => {
       const skin = o.skin, hair = o.hair || "#3a2a1a";
       // backdrop
       x.fillStyle = o.cls ? shade(EH.CLASS[o.cls].c, -0.6) : "#2f3a2a";
@@ -782,6 +782,14 @@ EH.Art = (function () {
         x.fillStyle = o.hatc || "#5a4a3a"; x.fillRect(4, 3, 16, 10);
         x.fillStyle = shade(o.hatc || "#5a4a3a", -0.45); x.fillRect(6, 5, 12, 10);
         x.fillStyle = skin; x.fillRect(7, 7, 10, 9);
+      } else if (o.hat === "cap") {
+        // hair underneath, cap over it — matches the world sprite
+        x.fillStyle = hair; x.fillRect(5, 5, 14, 4);
+        x.fillRect(5, 8, 2, 5); x.fillRect(17, 8, 2, 5);
+        if (o.long) { x.fillRect(4, 8, 2, 10); x.fillRect(18, 8, 2, 10); }
+        x.fillStyle = o.hatc || "#8c6a3a"; x.fillRect(5, 2, 14, 5);
+        x.fillStyle = shade(o.hatc || "#8c6a3a", 0.22); x.fillRect(6, 2, 12, 2);
+        x.fillStyle = shade(o.hatc || "#8c6a3a", -0.3); x.fillRect(3, 6, 18, 2);
       } else {
         x.fillStyle = hair; x.fillRect(5, 3, 14, 5);
         x.fillRect(5, 6, 2, 7); x.fillRect(17, 6, 2, 7);
@@ -799,11 +807,36 @@ EH.Art = (function () {
       x.fillStyle = "#8a4a3a"; x.fillRect(10, 15, 4, 1);
       if (o.blush) { x.fillStyle = "rgba(224,138,122,.5)"; x.fillRect(7, 13, 2, 1); x.fillRect(15, 13, 2, 1); }
     });
+    /* A DOM node can only have one parent. The cached canvas is shared, so
+       appending it to a second container silently stole it out of the first —
+       the villager roster and the dialogue box were fighting over the same
+       element and portraits blinked or vanished. Hand back the master only
+       while it is unattached; otherwise blit a private copy. */
+    if (!(master.parentNode || master.parentElement)) return master;
+    const own = mk(24, 24);
+    own.x.drawImage(master, 0, 0);
+    return own.cv;
   }
 
   /* ── resource icons for the top bar ───────────────────────── */
   function resIcon(k) { return icon(k === "gold" ? "coin" : k, k === "gold" ? "#f0c05a" : k === "wood" ? "#8a5f35" : k === "stone" ? "#8f8c83" : k === "food" ? "#d8452f" : "#7a9ad0"); }
 
+  /* ── custom external sprites (Imagen / PNG) with procedural fallback ── */
+  const customSprites = new Map();
+  function loadCustom(id, path) {
+    if (typeof Image === "undefined") return;
+    const img = new Image();
+    img.src = path;
+    img.onload = () => { customSprites.set(id, img); };
+  }
+  function getCustom(id) {
+    return customSprites.get(id) || null;
+  }
+
+  // Preload available external sprites
+  loadCustom("warden", "assets/sprites/characters/warden.png");
+  loadCustom("ranger", "assets/sprites/characters/ranger.png");
+
   return { mk, px, tile, wallSide, obj, humanoid, monster, pet, building, icon, resIcon, portrait, cache: CACHE,
-           SKIN, HAIR, CLOTH, PANTS };
+           SKIN, HAIR, CLOTH, PANTS, loadCustom, getCustom, customSprites };
 })();

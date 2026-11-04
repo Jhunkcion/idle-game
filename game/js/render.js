@@ -4,6 +4,20 @@
 "use strict";
 var EH = window.EH;
 
+/* ── visual-only random ──────────────────────────────────────────────────
+   Rain, particles and screen shake are pure presentation. They must not draw
+   from EH.rand, which is the SEEDED SIMULATION rng: rendering runs at an
+   arbitrary frame rate, so consuming it here would make two runs of the same
+   seed diverge (and silently break the determinism the harness audits for).
+   Private xorshift, never seeded from and never written back to game state. */
+let _vs = 0x9e3779b9;
+EH.vrnd = function (a, b) {
+  _vs ^= _vs << 13; _vs ^= _vs >>> 17; _vs ^= _vs << 5; _vs |= 0;
+  const u = (_vs >>> 8) / 0x1000000;
+  if (a === undefined) return u;
+  return a + u * ((b === undefined ? 1 : b) - a);
+};
+
 /* ══════════════════════════════════════════════════════════════
    FLOATING TEXT (DOM overlay, projected from world space)
    ══════════════════════════════════════════════════════════════ */
@@ -50,8 +64,8 @@ EH.Part = (function () {
   const list = [];
   function burst(wx, wy, color, n) {
     for (let i = 0; i < (n || 12); i++) {
-      const a = EH.rand(0, EH.TAU), s = EH.rand(10, 60);
-      list.push({ x: wx, y: wy, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 20, t: EH.rand(0.3, 0.8), c: color, g: 90 });
+      const a = EH.vrnd(0, EH.TAU), s = EH.vrnd(10, 60);
+      list.push({ x: wx, y: wy, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 20, t: EH.vrnd(0.3, 0.8), c: color, g: 90 });
     }
   }
   function update(dt) { for (let i = list.length - 1; i >= 0; i--) { const p = list[i]; p.t -= dt; if (p.t <= 0) { list.splice(i, 1); continue; } p.vy += p.g * dt; p.x += p.vx * dt / EH.CFG.TW * 2; p.y += p.vy * dt / EH.CFG.TH * 2; } }
@@ -66,7 +80,9 @@ EH.Render = (function () {
   let cv, ctx, lc, lx;
   let VW = EH.CFG.VW, VH = EH.CFG.VH, scale = 2;
   let camX = 0, camY = 0;
+  let shakeX = 0, shakeY = 0;
   let shakeT = 0, shakeMag = 0;
+  let lastMap = null, lastSt = null;
   const rain = [];
   let rainInit = false;
   let flashT = 0;
@@ -107,31 +123,80 @@ EH.Render = (function () {
   /* ── projection ────────────────────────────────────────────── */
   const TW = EH.CFG.TW, TH = EH.CFG.TH;
   function project(wx, wy) {
-    const sx = (wx - wy) * (TW / 2) + camX;
-    const sy = (wx + wy) * (TH / 2) + camY;
+    const sx = (wx - wy) * (TW / 2) + camX + shakeX;
+    const sy = (wx + wy) * (TH / 2) + camY + shakeY;
     if (sx < -80 || sy < -120 || sx > VW + 80 || sy > VH + 120) return null;
     return { x: Math.round(sx), y: Math.round(sy) };
   }
-  function projectRaw(wx, wy) { return { x: (wx - wy) * (TW / 2) + camX, y: (wx + wy) * (TH / 2) + camY }; }
+  function projectRaw(wx, wy) { return { x: (wx - wy) * (TW / 2) + camX + shakeX, y: (wx + wy) * (TH / 2) + camY + shakeY }; }
   function unproject(sx, sy) {
-    const x = sx - camX, y = sy - camY;
+    const x = sx - (camX + shakeX), y = sy - (camY + shakeY);
     return { x: (y / (TH / 2) + x / (TW / 2)) / 2, y: (y / (TH / 2) - x / (TW / 2)) / 2 };
   }
   function shake(m) { shakeMag = Math.max(shakeMag, m || 3); shakeT = 0.22; }
 
   /* ── camera ────────────────────────────────────────────────── */
-  function updateCam(st, dt) {
-    const p = st.player;
-    const tx = VW / 2 - (p.x - p.y) * (TW / 2);
-    const ty = VH / 2 - (p.x + p.y) * (TH / 2) + 12;
-    const k = 1 - Math.pow(0.0015, dt);
-    camX = EH.lerp(camX, tx, k); camY = EH.lerp(camY, ty, k);
-    if (shakeT > 0) { shakeT -= dt; const m = shakeMag * (shakeT / 0.22); camX += EH.rand(-m, m); camY += EH.rand(-m, m); if (shakeT <= 0) shakeMag = 0; }
+  function clampCam() {
+    if (!lastSt || !lastSt.map) return;
+    const mw = lastSt.map.w || 46;
+    const mh = lastSt.map.h || 46;
+    const minX = VW / 2 - mw * (TW / 2) - 160;
+    const maxX = VW / 2 + mh * (TW / 2) + 160;
+    const minY = VH / 2 - (mw + mh) * (TH / 2) - 100;
+    const maxY = VH / 2 + 100;
+    camX = EH.clamp(camX, minX, maxX);
+    camY = EH.clamp(camY, minY, maxY);
   }
+
+  /* The camera is completely free and does NOT track the Warden as they walk.
+     Only map transitions or explicit player commands (H key / ⌖ button) center it. */
+  function updateCam(st, dt) {
+    lastSt = st;
+    if (st && st.map && st.map !== lastMap) {
+      lastMap = st.map;
+      snapCam(st);
+    }
+    if (shakeT > 0) {
+      shakeT -= dt;
+      const m = shakeMag * (shakeT / 0.22);
+      shakeX = (EH.vrnd(-1, 1)) * m;
+      shakeY = (EH.vrnd(-1, 1)) * m;
+      if (shakeT <= 0) { shakeMag = 0; shakeX = 0; shakeY = 0; }
+    } else {
+      shakeX = 0; shakeY = 0;
+    }
+  }
+
+  /* Free-look: WASD / arrows pan the camera around the map without moving anyone.
+     Non-inverted: D moves view right (world shifts left), A moves view left,
+     W moves view up (world shifts down), S moves view down (world shifts up). */
+  function pan(dx, dy, dt) {
+    const S = 140 * Math.min(dt || 0.016, 0.05);
+    camX -= dx * S;
+    camY -= dy * S;
+    clampCam();
+  }
+
+  function recenter(dt) {
+    return false;
+  }
+
   function snapCam(st) {
-    const p = st.player;
+    const s = st || lastSt;
+    if (!s || !s.player) return;
+    if (s.map) lastMap = s.map;
+    const p = s.player;
     camX = VW / 2 - (p.x - p.y) * (TW / 2);
     camY = VH / 2 - (p.x + p.y) * (TH / 2) + 12;
+    clampCam();
+  }
+
+  /* focusHero — snaps the camera view directly to the Warden's current position.
+     Bound to H key and the ⌖ button in the top bar. */
+  function focusHero(st) {
+    const s = st || lastSt || (EH.Game && EH.Game.st);
+    if (!s || !s.player) return;
+    snapCam(s);
   }
 
   /* ══════════════════════════════════════════════════════════
@@ -173,10 +238,22 @@ EH.Render = (function () {
     actors.push({ k: "pl", o: st.player });
     for (const a of actors) put(Math.round(a.o.x + a.o.y), a);
 
-    // ── tile pass (painter's order, one diagonal at a time) ──
+    /* ══ TWO-PASS PAINTER'S ALGORITHM ══════════════════════════════
+       PASS 1 draws ONLY flat ground. Ground has no height, so it must never
+       paint over a character standing on a tile behind it. The old single
+       pass drew each diagonal's tiles then that diagonal's actors — which let
+       the NEXT diagonal's ground diamond (its top vertex sits ~8px above the
+       actor's feet) cover the actor's legs. That was the reported "tiles in
+       front of characters" bug.
+       PASS 2 draws everything WITH height — wall faces, trees, rocks, chests,
+       portals, buildings, characters — strictly depth-sorted, so tall things
+       still correctly occlude each other.
+       ══════════════════════════════════════════════════════════════ */
     const S = map.w + map.h;
     const lights = [];
     const chestAt = dungeon ? new Map(st.dmap.chests.map(c => [c.x + "," + c.y, c])) : null;
+
+    // PASS 1 — flat ground + collect tall items into depth buckets
     for (let s = 0; s < S; s++) {
       const x0 = Math.max(0, s - map.h + 1), x1 = Math.min(map.w - 1, s);
       for (let x = x0; x <= x1; x++) {
@@ -193,43 +270,36 @@ EH.Render = (function () {
         }
         const def = EH.tileDef(id);
         const v = map.v[map.i(x, y)];
-        // walls get a raised side face
-        if (def.kind === "x") {
-          const hgt = dungeon ? 14 : 10;
-          ctx.drawImage(EH.Art.wallSide(id, v, hgt), sp.x - TW / 2, sp.y - TH / 2);
-        } else {
-          const anim = def.anim ? Math.floor(st.time.real * 3) % 4 : v;
-          ctx.drawImage(EH.Art.tile(id, anim), sp.x - TW / 2, sp.y - TH / 2);
-        }
-        // objects on the tile
-        if (def.obj) {
-          const o = def.obj === "chest" ? null : def.obj;
-          if (o) {
-            const spr = EH.Art.obj(o, v, { season: st.time.season, c: def.pal });
-            ctx.drawImage(spr, sp.x - 16, sp.y + TH / 2 - 48);
-          }
-        }
-        // chests & portals & dungeon stairs
+        const anim = def.anim ? Math.floor(st.time.real * 3) % 4 : v;
+        ctx.drawImage(EH.Art.tile(id, anim), sp.x - TW / 2, sp.y - TH / 2);
+        if (dungeon && id === EH.T.SLAVA) lights.push({ x: x + 0.5, y: y + 0.5, r: 2.4, c: [255, 130, 50], a: 0.8 });
+        // anything with height is deferred to the depth-sorted pass
+        if (def.kind === "x") put(s, { pr: 0, k: "wall", x, y, id, v });
+        if (def.obj && def.obj !== "chest") put(s, { pr: 0, k: "obj", x, y, o: def.obj, v, pal: def.pal });
         if (dungeon) {
           const ch = chestAt ? chestAt.get(x + "," + y) : null;
-          if (ch && !ch.opened) ctx.drawImage(EH.Art.obj("chest", 0, { opened: ch.opened }), sp.x - 16, sp.y + TH / 2 - 48);
-          if (id === EH.T.DSTAIRS) ctx.drawImage(EH.Art.obj("stairs", 0), sp.x - 16, sp.y + TH / 2 - 48);
-          if (id === EH.T.DPORTAL) ctx.drawImage(EH.Art.obj("portal", 0, { t: st.time.real }), sp.x - 16, sp.y + TH / 2 - 48);
-          if (id === EH.T.SLAVA) lights.push({ x: x + 0.5, y: y + 0.5, r: 2.4, c: [255, 130, 50], a: 0.8 });
+          if (ch && !ch.opened) put(s, { pr: 0, k: "spr", x, y, f: () => EH.Art.obj("chest", 0, { opened: ch.opened }) });
+          if (id === EH.T.DSTAIRS) put(s, { pr: 0, k: "spr", x, y, f: () => EH.Art.obj("stairs", 0) });
+          if (id === EH.T.DPORTAL) put(s, { pr: 0, k: "spr", x, y, f: () => EH.Art.obj("portal", 0, { t: st.time.real }) });
         } else if (id === EH.T.DPORTAL) {
-          ctx.drawImage(EH.Art.obj("portal", 0, { t: st.time.real }), sp.x - 16, sp.y + TH / 2 - 48);
+          put(s, { pr: 0, k: "spr", x, y, f: () => EH.Art.obj("portal", 0, { t: st.time.real }) });
           lights.push({ x: x + 0.5, y: y + 0.5, r: 3.2, c: [150, 100, 240], a: 0.85 });
         }
       }
-      // actors standing on this diagonal are drawn after its tiles
-      const bk = buckets.get(s);
-      if (bk) for (const a of bk) {
-        if (a.k === "b") drawBuilding(ctx, a.o, st);
-        else drawActor(ctx, a, st);
+    }
+
+    // PASS 2 — depth-sorted tall things, then buildings, then actors
+    function drawBucket(bk) {
+      bk.sort((a, b) => (a.pr === undefined ? 2 : a.pr) - (b.pr === undefined ? 2 : b.pr));
+      for (const a of bk) {
+        if (a.k === "b") { drawBuilding(ctx, a.o, st); continue; }
+        if (a.k === "wall") { const sp = project(a.x, a.y); if (sp) ctx.drawImage(EH.Art.wallSide(a.id, a.v, dungeon ? 14 : 10), sp.x - TW / 2, sp.y - TH / 2); continue; }
+        if (a.k === "obj") { const sp = project(a.x, a.y); if (sp) ctx.drawImage(EH.Art.obj(a.o, a.v, { season: st.time.season, c: a.pal }), sp.x - 16, sp.y + TH / 2 - 48); continue; }
+        if (a.k === "spr") { const sp = project(a.x, a.y); if (sp) ctx.drawImage(a.f(), sp.x - 16, sp.y + TH / 2 - 48); continue; }
+        drawActor(ctx, a, st);
       }
     }
-    // any actors beyond the last tile row
-    for (let s = S; s < S + 6; s++) { const bk = buckets.get(s); if (bk) for (const a of bk) { if (a.k === "b") drawBuilding(ctx, a.o, st); else drawActor(ctx, a, st); } }
+    for (let s = 0; s < S + 6; s++) { const bk = buckets.get(s); if (bk) drawBucket(bk); }
 
     EH.Part.update(dt);
     EH.Part.draw(ctx);
@@ -314,7 +384,7 @@ EH.Render = (function () {
   /* ── weather particles ─────────────────────────────────────── */
   function initWeather() {
     rain.length = 0;
-    for (let i = 0; i < 220; i++) rain.push({ x: EH.rand(-40, VW + 40), y: EH.rand(-20, VH), s: EH.rand(0.6, 1.5), v: EH.rand(180, 320) });
+    for (let i = 0; i < 220; i++) rain.push({ x: EH.vrnd(-40, VW + 40), y: EH.vrnd(-20, VH), s: EH.vrnd(0.6, 1.5), v: EH.vrnd(180, 320) });
     rainInit = true;
   }
   function drawWeather(ctx, W, dt, st) {
@@ -324,7 +394,7 @@ EH.Render = (function () {
       ctx.beginPath();
       for (const p of rain) {
         p.y += p.v * dt * p.s; p.x -= p.v * 0.22 * dt * p.s;
-        if (p.y > VH) { p.y = -10; p.x = EH.rand(-40, VW + 60); }
+        if (p.y > VH) { p.y = -10; p.x = EH.vrnd(-40, VW + 60); }
         if (p.x < -40) p.x = VW + 20;
         ctx.moveTo(p.x, p.y); ctx.lineTo(p.x - 2 * p.s, p.y + 7 * p.s);
       }
@@ -333,7 +403,7 @@ EH.Render = (function () {
       ctx.fillStyle = "rgba(240,248,255,.75)";
       for (const p of rain) {
         p.y += p.v * 0.22 * dt * p.s; p.x += Math.sin((p.y + p.s * 100) * 0.03) * 14 * dt;
-        if (p.y > VH) { p.y = -6; p.x = EH.rand(-40, VW + 40); }
+        if (p.y > VH) { p.y = -6; p.x = EH.vrnd(-40, VW + 40); }
         ctx.fillRect(p.x | 0, p.y | 0, p.s > 1.1 ? 2 : 1, p.s > 1.1 ? 2 : 1);
       }
     } else if (W.part === "fog") {
@@ -427,11 +497,16 @@ EH.Render = (function () {
     const fi = walking ? (1 + (Math.floor(e.anim || 0) % 2)) : 0;
     const frame = set[fi] || set[0];
     const atk = (a.k === "pl" && st.player.atkAnim > 0) || (a.k === "c" && (e.atkAnim || 0) > 0);
+    const custom = EH.Art.getCustom(e.cls || e.job || (a.k === "pl" ? "warden" : null));
     ctx.save();
     ctx.translate(sx, sy);
     if (e.flip) ctx.scale(-1, 1);
     if (atk) ctx.translate(EH.sign(e.flip ? -1 : 1) * 1, 0);
-    ctx.drawImage(frame, -8, -23, 16, 24);
+    if (custom) {
+      ctx.drawImage(custom, -11, -26, 22, 26);
+    } else {
+      ctx.drawImage(frame, -8, -23, 16, 24);
+    }
     ctx.restore();
     // hurt flash
     if (e.hurtT > 0) { ctx.save(); ctx.globalAlpha = 0.5; ctx.globalCompositeOperation = "lighter"; ctx.fillStyle = "#ff9070"; ctx.fillRect(sx - 6, sy - 22, 12, 22); ctx.restore(); }
@@ -467,7 +542,7 @@ EH.Render = (function () {
     }
   }
 
-  return { init, resize, draw, project, projectRaw, unproject, shake, snapCam, get scale() { return scale; }, get ctx() { return ctx; }, VW, VH };
+  return { init, resize, draw, project, projectRaw, unproject, shake, snapCam, pan, recenter, focusHero, get scale() { return scale; }, get ctx() { return ctx; }, VW, VH };
 })();
 
 /* ── screen shake + level flash shims used by other modules ───── */

@@ -1,0 +1,1113 @@
+diff --git a/HOW-TO-TEST.md b/HOW-TO-TEST.md
+index 450827a..0082bb5 100644
+--- a/HOW-TO-TEST.md
++++ b/HOW-TO-TEST.md
+@@ -1,9 +1,33 @@
+-# Emberhold — M1 test build
++# Emberhold — M1.1 test build (playtest round 1 fixes)
+ 
+ How to run it, what to look at, and what is *not* there yet.
+ 
+ ---
+ 
++## 0. What changed since the build you tested
++
++Your seven findings. **1–3 are fixed here; 4–7 are new scope and are *not* in this build** — they are
++written up as pending decisions in `game/docs/PRD.md` Appendix D.6.
++
++| # | You said | Status |
++|---|---|---|
++| 1 | Can't control the Warden at all | **Fixed — and finished.** Direct control is now *gone* rather than half-working: no WASD walk, no click-to-walk. The Warden fights, drinks, explores and descends on its own. You issue orders. See §1 below |
++| 2 | Tiles render in front of characters | **Fixed.** The renderer is now two passes: all flat ground first, then everything with height, depth-sorted. A regression check records a whole frame and fails if any ground tile is painted after a raised object |
++| 3 | Mara's and Sylvie's dialogue boxes are glitchy | **Fixed — two causes found.** The option row was re-rolling a random number 8×/second (so it blinked and clicks fell through), and portrait canvases were being stolen between the dialogue box and the TOWN roster. Both fixed, both now covered by a check |
++| 4 | Continent map + region select before starting | Pending — new scope |
++| 5 | The region should be vast, not just the village | Pending — new scope |
++| 6 | Dungeon entrance outside the village | Pending — depends on 5 |
++| 7 | Travellers who trade, tavern, recruit, apply for citizenship | Pending — new scope |
++
++Three *extra* bugs were found while fixing the above and are also fixed: buildings could be placed on
++whatever map the Warden was standing on (including the dungeon), a summoning monster could crash the
++frame right after killing the Warden, and the renderer was consuming the seeded game rng (rain,
++particles, screen shake), which would have broken determinism as soon as the weather changed.
++
++**Suite: 111 → 116 checks, all green, states still byte-identical across runs.**
++
++---
++
+ ## 1. Run the game
+ 
+ **Easiest — double-click `game/index.html`.**
+@@ -19,8 +43,25 @@ python3 -m http.server 8000
+ 
+ Any static server works (`npx serve game`, `php -S localhost:8000 -t game`, …).
+ 
+-**Controls.** Click to move. Nav bar: HERO · BAG · BUILD · TOWN · QUESTS · PETS · ☰.
+-Speed buttons at the top left (❚❚ ▶ ▶▶ ▶▶▶). `F` toggles auto-explore in the dungeon.
++**Controls — there is no joystick.** You never move the Warden. What you do instead:
++
++| Input | Effect |
++|---|---|
++| Click a **villager** | The Warden walks over and talks (an order, not a walk command) |
++| Click a **building** | Use it — shop, forge, chapel, tavern |
++| Click a **chest / stairs / portal** | The Warden walks to it and uses it |
++| Click **empty ground** | Nothing. Deliberately |
++| `WASD` / arrows | **Pan the camera.** The Warden stays put |
++| `F` | Delve — send the Warden to the Hollowdeep |
++| `R` | Recall to the village |
++| `E` / `Space` / `1` `2` `3` | Talk to nearest · strike nearest · skills and potion |
++| `C I B T Q P` · `+ −` · `Esc` | Panels · game speed · close |
++
++Left alone with no input at all, the Warden strolls around the village for ~40 s, then walks to the
++Hollowdeep mouth and descends by itself. It casts, drinks below 45 % HP, opens chests, takes stairs,
++auto-sells trash, and comes home to rest after a recall. **Nothing requires your hands.**
++
++Nav bar: HERO · BAG · BUILD · TOWN · QUESTS · PETS · ☰. Speed buttons top-left (❚❚ ▶ ▶▶ ▶▶▶).
+ 
+ ---
+ 
+@@ -30,7 +71,7 @@ Speed buttons at the top left (❚❚ ▶ ▶▶ ▶▶▶). `F` toggles auto-ex
+ node tools/smoke.js
+ ```
+ 
+-No browser needed. **111 checks**, exits non-zero on any failure, takes ~75 s.
++No browser needed. **116 checks**, exits non-zero on any failure, takes ~70 s.
+ It parses the real `index.html` into a DOM tree, so a missing element fails loudly instead of
+ being silently invented.
+ 
+@@ -56,6 +97,11 @@ Press **`F9`** (or click the **BENCH** button) to open the dev test bench.
+ 
+ ### Things worth trying
+ 
++0. **Do nothing.** Start a game and take your hands off the keyboard for a minute. The Warden should
++   amble around the plaza and then walk itself into the Hollowdeep. If it ever stands still for more
++   than a few seconds in the village, that is a bug — tell me.
++0b. **Look at a character's feet.** Stand the camera so a villager is on the tile *behind* a rock or
++   a patch of grass. Ground must never cover their legs now.
+ 1. **Jobs make the army.** Recruit nobody. Watch a farmer's STR climb (~+0.26/game day) while their
+    INT never moves. A farming village literally cannot produce a Mage — you have to build and staff
+    something that trains INT.
+@@ -74,7 +120,10 @@ Being explicit so you do not go looking for it:
+ 
+ - **No recruitment UI in the normal game.** Only via the bench. The TOWN panel does not list stats.
+ - **No Breaches, no Retaliation raids, no Expedition Orders.** That is M2.
+-- **No location select.** One map, the Vale.
++- **No travellers.** Nobody arrives, nobody applies for citizenship, the tavern has no visitors who
++  are not already villagers (finding 7).
++- **No location select, no continent map, no region choice.** One map, the Vale — and the Vale *is*
++  the village. Findings 4–6 all land here.
+ - **No village rank / star progression.**
+ - **Tooltips do not yet show the production breakdown** (capacity × match × adjacency × combo). The
+   bench shows it; the game UI does not.
+diff --git a/game/docs/PRD.md b/game/docs/PRD.md
+index 91db454..7632429 100644
+--- a/game/docs/PRD.md
++++ b/game/docs/PRD.md
+@@ -1092,7 +1092,7 @@ M1 signed off and implemented. **No system was built before FR-03 was proven**,
+ | **§10.5** | `offline` downtime field: zeroes output, decays on the game clock | `build.js` `efficiency`/`update` |
+ | **D14** | Adventurers work at home at 65% | `build.js` `efficiency` |
+ 
+-### Harness: 88 → 111 checks, all green, deterministic
++### Harness: 88 → 111 checks, all green, deterministic  *(116 after playtest round 1 — see Appendix D)*
+ 
+ 23 checks added for the above. The suite is now **byte-reproducible** — every `newState` in it is
+ seeded, so a failure can be replayed exactly. That is FR-03 paying for itself immediately.
+@@ -1121,3 +1121,121 @@ seeded, so a failure can be replayed exactly. That is FR-03 paying for itself im
+ `wall` (Palisade) is tagged `cat: "legacy"`. §7.4 cuts tower-defence structures and §10.4 makes
+ adventurers the only defence, so M2 must either repurpose it as decoration-terrain or remove it.
+ It is tagged rather than deleted because removing it now would break existing saves for no M1 gain.
++
++---
++
++## Appendix D — Playtest round 1 (2026-11-03)
++
++The signed-off M1 build was played locally and came back with seven findings. Three were defects
++against already-locked design and are **fixed and harness-covered**; four are new scope and are
++**recorded here as pending decisions**, not as work done.
++
++### D.1 Fixed — the Warden was still on a joystick (§1.3)
++
++M1 shipped §1.3 half-implemented: the auto-battler existed but manual locomotion was still wired up
++alongside it, so the game was neither a watched simulation nor a controllable action game. The
++manual path is now gone:
++
++| Removed | Replaced by |
++|---|---|
++| WASD / arrow-key locomotion | The same keys **pan the camera** — looking around is the player's, moving is not |
++| Click-empty-ground free walk | Nothing. A click on open ground is not an order |
++| Click-monster manual approach | Clicking a monster sets `st.focus` only; the Warden closes the distance itself |
++| `F` auto-explore toggle | `F` = **Delve** — an order to descend, not a mode switch. `st.auto` is permanently `true` |
++
++Because there is no longer a hand on the wheel, the Warden had to become self-sufficient or the loop
++would stall the moment the player stopped clicking. `autoWarden()` (game.js) now, on a 0.35 s sim
++tick: drinks below 45 % HP, casts whatever is off cooldown (never re-casting a snare on an already
++snared target), and — in the village — strolls locally so it stays visible and every villager stays
++clickable-and-reachable, then walks to the Hollowdeep mouth and descends on its own after 40 s idle.
++A recall rests 8 s (60 s if downed) before the next descent, so a wipe cannot loop instantly.
++
++Interaction clicks are unchanged and remain the player's real verbs: talk to a villager, use a
++building, open a chest, take the stairs, enter the portal. All of them set an *intent*; the
++simulation does the walking.
++
++### D.2 Fixed — ground tiles painted over characters (§ P5 legibility)
++
++The renderer drew one diagonal at a time: that diagonal's tiles, then that diagonal's actors. The
++next diagonal's ground diamond has its top vertex ~8 px above the previous diagonal's actors' feet,
++so it landed on top of their legs — the exact artifact in the playtest screenshot.
++
++`draw()` is now two passes. **Pass 1** paints *only* flat ground and, while it is at it, files
++everything with height into depth buckets. **Pass 2** draws the buckets in diagonal order, and
++within a bucket draws terrain props → buildings → characters. Flat ground can therefore never
++occlude anything, while tall things still occlude each other correctly. Wall tiles also gained a
++proper top face (the side-face sprite never had one, so wall tops were showing background).
++
++### D.3 Fixed — Mara Loam's and Sylvie Thistle's dialogue boxes jittered
++
++Two independent causes, both specific to those two villagers because they are the ones with no
++service counter to anchor the option list:
++
++1. **The option row re-rolled itself ~8×/second.** `syncAll()` refreshes the open dialogue on a
++   0.12 s timer, and `NPCs.options()` decided whether to show *"Any work that needs doing?"* with a
++   fresh `EH.chance(0.5)` on **every call**. The row therefore blinked in and out, resizing the box,
++   and the buttons were destroyed and recreated under the cursor so clicks fell through. The coin
++   flip is now a stable per-villager hash, and `refreshDialogue()` rebuilds the row only when the
++   option signature actually changes. *This was also a determinism leak* — the UI was consuming the
++   seeded simulation rng from outside the sim step.
++2. **Portraits were stolen between containers.** `Art.portrait()` returns a *cached canvas element*,
++   and a DOM node has only one parent — so appending Sylvie's portrait to the dialogue box silently
++   lifted it out of the TOWN roster, and the roster's next refresh lifted it back, emptying the
++   dialogue box. Portraits now hand out the master canvas only while it is unattached and blit a
++   private copy otherwise. The cache key also omitted `long`/`eye`/`blush`, so long-haired and
++   short-haired villagers could share one face; and a `cap` was never drawn at all (Sylvie and Pip
++   wore one in the world and showed bare hair in the box). Both fixed.
++
++### D.4 Three latent bugs the fixes exposed
++
++Fixing D.1 meant the Warden now spends far more time in the dungeon unattended, which immediately
++detonated three pre-existing defects. All three are fixed:
++
++1. **Buildings could be placed on the wrong map.** `EH.Build.place/findSpot/remove` went through
++   `st.map`, i.e. *wherever the Warden currently stood*. Open the build menu from inside the
++   Hollowdeep and village footprints were stamped onto the dungeon map, whose occupancy grid knows
++   nothing about the town — two buildings could then occupy the same tiles. All building placement
++   now resolves through `EH.Build.mapOf(st) === st.townMap`, and `tryPlace()` refuses outright with
++   a toast when the Warden is not in the village.
++2. **A summoner could crash the frame after killing the Warden.** `monUpdate()` reads `st.dmap.floor`
++   when it rolls a summon, but the swing immediately before it can down the Warden — and being downed
++   calls `exitDungeon()`, which nulls `st.dmap` *while that function is still on the stack*. The
++   loop in `update()` re-checked the map between monsters; nothing re-checked inside one. Now
++   guarded, and summons read the durable `st.dungeon.floor`.
++3. **The renderer was drinking the seeded rng.** Rain recycling, particle bursts and screen shake
++   all called `EH.rand`, which is the *simulation* stream. Rendering runs at an arbitrary frame
++   rate, so any weather or hit effect shifted the game's random sequence. All of it now uses a
++   private visual-only xorshift (`EH.vrnd`) that never touches game state.
++
++### D.5 Harness: 111 → 116 checks, all green, still byte-identical
++
++Five new checks pin the round's fixes so they cannot silently regress:
++
++- held WASD/arrows move the Warden **0.000 tiles** over 10 s, and `st.auto` never goes false;
++- 40 clicks on open ground queue no path and move nothing;
++- left alone in the village with no input, the Warden **descends unaided** (~47 s on the pinned seed)
++  and strolls while it waits;
++- a full `Render.draw` is recorded through the canvas stub and every one of ~1270 ground-tile draws
++  must precede all ~350 raised draws;
++- Mara's and Sylvie's option lists are identical across 200 reads and their buttons survive 40
++  `syncAll()` ticks without being rebuilt; two attached containers keep two distinct portraits.
++
++Two existing checks were updated to the new rules rather than deleted: the monster-AI duel now
++explicitly *silences* the Warden (no swings, no skills, no exploring) because §1.3 means it would
++otherwise fight back and kill the monster under test; and `domstub.js` was made faithful about
++`appendChild` moving a node out of its previous parent, which is precisely the fidelity gap that
++let the portrait bug ship.
++
++### D.6 Pending — four findings that are new scope, not defects
++
++Recorded so they are not lost. Each needs a decision before M2 absorbs it:
++
++| # | Finding | Why it is scope, not a bug |
++|---|---|---|
++| 4 | Show a full continent map before starting; the player picks one available region | Adds a world layer *above* the current single map: continent data, region generation, a pre-game selection screen, and a save format that records the choice |
++| 5 | The chosen region must be **vast**, not just the village | The current town map *is* the whole region (46×46). A vast region implies village + hinterland: sub-locations, travel time, and a camera/minimap that can cope |
++| 6 | The dungeon entrance belongs **outside** the village boundary | Cheap on its own, but only meaningful once (5) exists — today "outside the village" and "outside the map" are the same place |
++| 7 | Travellers visit: trade, hang out in the tavern, can be recruited, can apply for citizenship | A new population class with its own lifecycle (arrival, stay, offer, acceptance), plus the first non-villager route into the roster and the first citizenship rule |
++
++4–7 together are a **world-layer re-architecture**, which is why they are being scoped as a unit
++rather than patched onto M1.
+diff --git a/game/index.html b/game/index.html
+index 7c61eb4..da1f954 100644
+--- a/game/index.html
++++ b/game/index.html
+@@ -63,7 +63,7 @@
+         <button class="hk" data-act="skill2"><span class="k">2</span><span class="nm">Guard</span></button>
+         <button class="hk" data-act="potion"><span class="k">3</span><span class="nm">Potion</span><span class="ct" id="hb-pot">0</span></button>
+         <button class="hk" data-act="recall"><span class="k">R</span><span class="nm">Recall</span></button>
+-        <button class="hk toggle" data-act="auto"><span class="k">F</span><span class="nm">Auto</span></button>
++        <button class="hk toggle" data-act="delve"><span class="k">F</span><span class="nm">Delve</span></button>
+       </div>
+       <div id="partybox"></div>
+     </footer>
+diff --git a/game/js/build.js b/game/js/build.js
+index 296e00e..7b4c9f9 100644
+--- a/game/js/build.js
++++ b/game/js/build.js
+@@ -54,8 +54,16 @@ EH.Build = (function () {
+   }
+ 
+   /* ── placement search ──────────────────────────────────────── */
++  /* Buildings belong to the VILLAGE, not to whatever map the Warden happens to
++     be standing on. Placement used to go through st.map, so opening the build
++     menu from inside the Hollowdeep stamped village footprints onto the dungeon
++     map — which knows nothing about the town's occupancy — and two buildings
++     could end up on the same tiles. Everything here goes through the town map. */
++  function mapOf(st) { return st.townMap || st.map; }
++
+   function findSpot(st, type, near, rad) {
+     const B = EH.BUILD[type];
++    const M = mapOf(st);
+     rad = rad || 9;
+     const cands = [];
+     for (let r = 0; r <= rad; r++) {
+@@ -65,16 +73,17 @@ EH.Build = (function () {
+       }
+     }
+     cands.sort((p, q) => p.r - q.r);
+-    for (const c of cands) if (st.map.canPlace(c.x, c.y, B.w, B.h)) return c;
+-    for (let y = 3; y < st.map.h - 4; y++) for (let x = 3; x < st.map.w - 4; x++)
+-      if (st.map.canPlace(x, y, B.w, B.h)) return { x, y };
++    for (const c of cands) if (M.canPlace(c.x, c.y, B.w, B.h)) return c;
++    for (let y = 3; y < M.h - 4; y++) for (let x = 3; x < M.w - 4; x++)
++      if (M.canPlace(x, y, B.w, B.h)) return { x, y };
+     return null;
+   }
+ 
+   /* ── construct ─────────────────────────────────────────────── */
+   function place(st, type, x, y, instant) {
+     const B = EH.BUILD[type]; if (!B) return null;
+-    if (!st.map.canPlace(x, y, B.w, B.h)) return null;
++    const M = mapOf(st);
++    if (!M.canPlace(x, y, B.w, B.h)) return null;
+     if (!instant && !canAfford(st, B.cost)) return null;
+     if (!instant) pay(st, B.cost);
+     const b = {
+@@ -83,7 +92,7 @@ EH.Build = (function () {
+       acc: {}, workers: [], hp: 100, builtDay: st.time.day
+     };
+     st.buildings.push(b);
+-    st.map.occupy(b);
++    M.occupy(b);
+     st.stats.built++;
+     if (type === "torch") st.town.lanterns = (st.town.lanterns || 0) + 1;
+     if (!instant) {
+@@ -110,7 +119,7 @@ EH.Build = (function () {
+   }
+   function demolish(st, b) {
+     const i = st.buildings.indexOf(b); if (i < 0) return false;
+-    st.map.vacate(b); st.buildings.splice(i, 1); refund(st, b);
++    mapOf(st).vacate(b); st.buildings.splice(i, 1); refund(st, b);
+     for (const n of st.npcs) { if (n.home === b.id) n.home = null; if (n.work === b.id) { n.work = null; n.act = null; } }
+     EH.log(`${EH.BUILD[b.type].n} demolished. 40% of materials recovered.`);
+     return true;
+@@ -348,7 +357,7 @@ EH.Build = (function () {
+      STARTER TOWN LAYOUT
+      ══════════════════════════════════════════════════════════════ */
+   function setupTown(st) {
+-    const m = st.map, C = Math.floor(m.w / 2);
++    const m = mapOf(st), C = Math.floor(m.w / 2);
+     st.town.plaza = { x: C, y: C };
+     st.buildings = [];
+     const put = (type, x, y, lvl, instant) => {
+diff --git a/game/js/combat.js b/game/js/combat.js
+index 7d095bc..78e6c58 100644
+--- a/game/js/combat.js
++++ b/game/js/combat.js
+@@ -153,7 +153,7 @@ EH.Combat = (function () {
+     // summon on death
+     if (mon.summon && EH.chance(0.3) && st.mons.length < 40) {
+       const def = EH.monById(mon.summon);
+-      if (def) { const s = makeMon(def, st.dmap.floor, {}); s.x = mon.x; s.y = mon.y; s.home = { x: s.x, y: s.y }; st.mons.push(s); }
++      if (def && st.dmap) { const s = makeMon(def, st.dungeon.floor, {}); s.x = mon.x; s.y = mon.y; s.home = { x: s.x, y: s.y }; st.mons.push(s); }
+     }
+   }
+ 
+@@ -417,9 +417,15 @@ EH.Combat = (function () {
+             else EH.log(`${tgt.name} is down! Lira can revive them at the chapel.`, "bad");
+           }
+         }
++        /* A lethal swing can down the Warden, and being downed tears the
++           dungeon down mid-call: exitDungeon() nulls st.dmap and empties
++           st.mons while this function is still on the stack. Anything after
++           the attack has to re-check, or it dereferences a null map — the
++           summoner below used to crash the whole frame exactly this way. */
++        if (!st.dmap || st.map.kind !== "dungeon") return;
+         if (m.summon && EH.chance(0.12) && st.mons.length < 42) {
+           const def2 = EH.monById(m.summon);
+-          if (def2) { const s = makeMon(def2, st.dmap.floor, {}); s.x = m.x + EH.rand(-1, 1); s.y = m.y + EH.rand(-1, 1); s.home = { x: s.x, y: s.y }; st.mons.push(s); }
++          if (def2) { const s = makeMon(def2, st.dungeon.floor, {}); s.x = m.x + EH.rand(-1, 1); s.y = m.y + EH.rand(-1, 1); s.home = { x: s.x, y: s.y }; st.mons.push(s); }
+         }
+       }
+     } else {
+@@ -600,7 +606,9 @@ EH.Combat = (function () {
+     st.prevMap = st.map;
+     st.dmap = null;
+     st.mons = [];
+-    st.auto = false;
++    st.auto = true;                       // §1.3 — there is no manual mode to fall back to
++    st.delve = false; st.idleT = 0;
++    st.recallT = wounded ? 60 : 8;        // catch a breath before the next descent
+     st.focus = null;
+     const k = st.map.dungeonPortal;
+     st.player.x = k ? k.x + 1 : st.town.plaza.x; st.player.y = k ? k.y + 1 : st.town.plaza.y;
+diff --git a/game/js/game.js b/game/js/game.js
+index 75c4bee..93147e7 100644
+--- a/game/js/game.js
++++ b/game/js/game.js
+@@ -39,7 +39,10 @@ EH.Game = (function () {
+       quests: { active: [], board: [], done: [] },
+       research: [], buffs: {},
+       stats: { kills: 0, goldEarned: 0, xp: 0, quests: 0, built: 0, itemsFound: 0, itemsSold: 0, legendary: 0, trades: 0, deaths: 0, playTime: 0, produced: {} },
+-      auto: false, placing: null, focus: null,
++      /* §1.3 — there is no manual mode. auto is permanently on; delve/idleT/
++         recallT/strollT drive the autonomous Warden (see autoWarden()). */
++      auto: true, delve: false, idleT: 0, recallT: 0, strollT: 0, autoCdT: 0,
++      placing: null, focus: null,
+       map: null, dmap: null, prevMap: null, derived: null,
+       createdAt: Date.now(), lastSeen: Date.now(),
+     };
+@@ -159,7 +162,7 @@ EH.Game = (function () {
+     EH.log("Bram Ashdown, the elder, is waiting by the well. He has work for you.", "story");
+     EH.log("To the north-east, the crack in the hillside breathes cold air. That is the <b>Hollowdeep</b>.", "story");
+     EH.toast("Welcome to Emberhold");
+-    setTimeout(() => EH.UI.hint('Press <kbd>E</kbd> near a villager to talk · <kbd>B</kbd> to build · click to walk'), 1200);
++    setTimeout(() => EH.UI.hint('Click a villager to talk · <kbd>B</kbd> to build · the Warden fights and explores on its own'), 1200);
+     const bram = EH.NPCs.byId(st, "bram");
+     if (bram && !bram.quest) {
+       const q = EH.Quests.generate(st, bram);
+@@ -287,25 +290,12 @@ EH.Game = (function () {
+   function updatePlayer(dt) {
+     const p = st.player, map = st.map, D = st.derived;
+     p.hurtT = Math.max(0, (p.hurtT || 0) - dt);
+-    let mx = 0, my = 0;
+-    // screen-relative movement mapped onto the iso grid
+-    if (keys.left) mx -= 1; if (keys.right) mx += 1;
+-    if (keys.up) my -= 1; if (keys.down) my += 1;
+-    if (mx || my) {
+-      p.path = [];
+-      // iso: screen-right = (+x, -y)? screen right vector = (1,-1) normalised; screen down = (1,1)
+-      const gx = (mx + my) * 0.7071, gy = (my - mx) * 0.7071;
+-      const len = Math.hypot(gx, gy) || 1;
+-      const nx = p.x + gx / len * D.speed * dt, ny = p.y + gy / len * D.speed * dt;
+-      // axis-separated collision so you slide along walls
+-      if (map.walk(Math.round(nx), Math.round(p.y))) p.x = nx;
+-      if (map.walk(Math.round(p.x), Math.round(ny))) p.y = ny;
+-      p.x = EH.clamp(p.x, 0.4, map.w - 1.4); p.y = EH.clamp(p.y, 0.4, map.h - 1.4);
+-      p.moving = true;
+-      p.dir = Math.abs(my) > Math.abs(mx) ? (my > 0 ? "front" : "back") : "side";
+-      p.flip = mx < 0;
+-      p.anim += dt * 8;
+-    } else if (p.path && p.path.length) {
++    /* §1.3 — the player never steers the Warden, so there is deliberately no
++       manual-locomotion branch here. The only movement the Warden makes is
++       pathing the simulation issues itself: walking to a villager you clicked,
++       to a chest or stair, to the portal, or auto-exploring a floor. WASD and
++       the arrow keys pan the CAMERA instead (see frame()). */
++    if (p.path && p.path.length) {
+       EH.Mover.tick(p, map, dt, D.speed);
+     } else p.moving = false;
+ 
+@@ -449,12 +439,7 @@ EH.Game = (function () {
+     if (map.kind === "dungeon") {
+       let best = null, bd = 1.3;
+       for (const m of st.mons) { const d = EH.dist(m.x, m.y, w.x, w.y); if (d < bd) { bd = d; best = m; } }
+-      if (best) {
+-        st.focus = best;
+-        const D = st.derived;
+-        if (EH.dist(best.x, best.y, st.player.x, st.player.y) > D.atkRange) EH.Mover.setPath(st.player, map, Math.round(best.x), Math.round(best.y), { adjacent: true });
+-        return;
+-      }
++      if (best) { st.focus = best; return; }   // targeting intent only; the Warden closes distance itself
+       const ch = map.chests.find(c => !c.opened && EH.dist(c.x + 0.0, c.y + 0.0, w.x, w.y) < 1.0);
+       if (ch) { EH.Mover.setPath(st.player, map, ch.x, ch.y, { adjacent: true }); st.pendingInteract = { kind: "chest", ref: ch }; return; }
+       if (EH.dist(map.stairs.x, map.stairs.y, w.x, w.y) < 1.1) { EH.Mover.setPath(st.player, map, map.stairs.x, map.stairs.y, { adjacent: true }); st.pendingInteract = { kind: "stairs" }; return; }
+@@ -481,9 +466,80 @@ EH.Game = (function () {
+         return;
+       }
+     }
++    /* §1.3 — clicking empty ground does NOT walk the Warden. The player issues
++       intents (talk · build · delve); the simulation does all the walking. */
+     st.pendingInteract = null;
+-    if (map.walk(tx, ty)) EH.Mover.setPath(st.player, map, tx, ty);
+   }
++  /* ══════════════════════════════════════════════════════════════
++     §1.3 — THE AUTONOMOUS WARDEN
++     With direct control removed, the Warden must be self-sufficient or the
++     game is unplayable. It casts whatever is off cooldown, drinks when hurt,
++     and — the part that makes this an idle game — walks back to the portal and
++     re-enters the dungeon on its own once recovered. The player's levers are
++     orders, gear, consumables and buildings. Never the joystick.
++     ══════════════════════════════════════════════════════════════ */
++  const DESCEND_AFTER = 40;   // seconds of village idle before the Warden delves on its own
++  const AUTO_CC = { trap: "root" };   // skill key -> the status it locks a target with
++
++  function autoWarden(dt) {
++    if (!st) return;
++    st.auto = true;                                       // §1.3 — the auto-Warden is not optional
++    st.autoCdT = (st.autoCdT || 0) - dt;
++    if (st.autoCdT > 0) return;
++    const step = 0.35 - st.autoCdT;                       // real time this tick covers
++    st.autoCdT = 0.35;
++    const p = st.player, D = st.derived;
++
++    if (st.map.kind === "dungeon") {
++      st.idleT = 0;
++      if (p.hp < D.hpMax * 0.45 && EH.UI.usePotion) EH.UI.usePotion();
++      // Never waste a snare on something already snared — addStatus would just
++      // refresh the duration and the target would stand rooted forever.
++      const tgt = st.focus || EH.Combat.nearestMon(st, p.x, p.y, 8);
++      for (const sk of EH.CLASS[p.cls].skills) {
++        if (sk.lvl > p.level || (p.cd[sk.k] || 0) > 0) continue;
++        const cc = AUTO_CC[sk.k];
++        if (cc && tgt && !tgt.dead && (tgt.statuses || []).some(x => x.k === cc)) continue;
++        if (EH.Combat.useSkill(st, sk.k)) break;
++      }
++      return;
++    }
++    // ── in the village ─────────────────────────────────────────────
++    if (st.recallT > 0) { st.recallT -= step; st.idleT = 0; return; }   // resting after a recall
++    if (st.pendingInteract || st.placing) { st.idleT = 0; return; }     // obeying an order
++    if (!st.delve) {
++      st.idleT = (st.idleT || 0) + step;
++      if (st.idleT < DESCEND_AFTER) { wardenStroll(step); return; }     // stay visible & reachable
++      if (p.hp < D.hpMax * 0.6) return;                                 // not fit to descend yet
++      st.delve = true;
++      EH.log("The Warden shoulders a pack and starts for the Hollowdeep.", "story");
++    }
++    const pk = st.map.dungeonPortal;
++    if (!pk) return;
++    if (EH.dist(p.x, p.y, pk.x, pk.y) < 2.2) {
++      st.delve = false; st.idleT = 0;
++      EH.Combat.enterDungeon(st, st.dungeon.maxFloor || 1);
++    } else if (!p.path.length) {
++      EH.Mover.setPath(p, st.map, Math.round(pk.x), Math.round(pk.y), { adjacent: true });
++    }
++  }
++
++  /* A short idle stroll around the plaza. Without direct control the Warden
++     would otherwise stand frozen (or bolt for the dungeon), so it ambles a
++     little — which also keeps every villager clickable-and-reachable. Runs in
++     the sim step, so it stays deterministic. */
++  function wardenStroll(step) {
++    const p = st.player;
++    st.strollT = (st.strollT || 0) - step;
++    if (p.path.length || st.strollT > 0) return;
++    st.strollT = EH.rand(3, 7);
++    const c = (st.town && st.town.plaza) || { x: p.x, y: p.y };
++    for (let t = 0; t < 8; t++) {
++      const tx = Math.round(c.x + EH.rand(-4, 4)), ty = Math.round(c.y + EH.rand(-4, 4));
++      if (st.map.walk(tx, ty)) { EH.Mover.setPath(p, st.map, tx, ty); return; }
++    }
++  }
++
+   function checkPending() {
+     const pi = st.pendingInteract; if (!pi) return;
+     const p = st.player;
+@@ -512,6 +568,12 @@ EH.Game = (function () {
+   function tryPlace(x, y) {
+     const type = st.placing; if (!type) return;
+     const B = EH.BUILD[type];
++    // the village is the only buildable map — see EH.Build.mapOf
++    if (st.map.kind !== "town") {
++      EH.toast("You can only build in the village — recall first (R).");
++      EH.UI.cancelPlace();
++      return;
++    }
+     // centre the footprint on the cursor
+     const bx = x - Math.floor(B.w / 2), by = y - Math.floor(B.h / 2);
+     if (!st.map.canPlace(bx, by, B.w, B.h)) { EH.toast("Can't build there"); EH.shake(2); return; }
+@@ -548,6 +610,9 @@ EH.Game = (function () {
+         if (st.map.kind === "dungeon") EH.Combat.autoExplore(st, gameDt);
+       }
+       EH.Combat.playerCombat(st, gameDt);
++      /* §1.3 — runs in BOTH the village and the dungeon: this is what replaces
++         the player's hands. Deliberately outside the dungeon block above. */
++      autoWarden(gameDt);
+       // companions and pets are town-safe, they follow you home
+       for (const c of st.companions) EH.Combat.compUpdate(c, st, gameDt);
+       for (const p of st.pets) EH.Combat.petUpdate(p, st, gameDt);
+@@ -615,6 +680,13 @@ EH.Game = (function () {
+     while (acc >= FIXED && steps < MAX_STEPS) { update(FIXED); acc -= FIXED; steps++; }
+     if (steps >= MAX_STEPS) acc = 0;           // frame took too long; abandon the debt
+     st.simSteps = (st.simSteps || 0) + steps;
++    // free-look camera (presentation only — never touches the simulation)
++    {
++      let dx = 0, dy = 0;
++      if (keys.left) dx -= 1; if (keys.right) dx += 1;
++      if (keys.up) dy -= 1; if (keys.down) dy += 1;
++      if (dx || dy) EH.Render.pan(dx, dy, dt); else EH.Render.recenter(dt);
++    }
+     EH.Render.draw(st, dt);
+     drawOverlay();
+     requestAnimationFrame(frame);
+@@ -700,7 +772,8 @@ EH.Game = (function () {
+       quests: st.quests,
+       research: st.research, buffs: {},
+       stats: st.stats,
+-      auto: false,
++      auto: true,        // §1.3 — the Warden is always self-driven, so offline
++                         // catch-up may keep delving (see the o.auto && o.inDungeon branch)
+       chestState: st.dungeon.chestState || {},
+       inDungeon: st.map.kind === "dungeon" ? st.dungeon.floor : 0,
+     };
+diff --git a/game/js/npc.js b/game/js/npc.js
+index 61cbb41..9cede1a 100644
+--- a/game/js/npc.js
++++ b/game/js/npc.js
+@@ -632,13 +632,28 @@ EH.NPCs = (function () {
+     return EH.pick(pool);
+   }
+ 
++  /* Stable per-NPC coin flip. This used to be EH.chance(0.5) evaluated on every
++     UI refresh (~8×/s), so the "Any work that needs doing?" row blinked in and
++     out of the dialogue box — the reported glitch on Mara and Sylvie, the two
++     villagers with no service counter — and it burned the seeded RNG from
++     outside the simulation, which is a determinism leak. Hashed instead. */
++  function offersWork(npc) {
++    if (npc.offerWork === undefined) {
++      const s = String(npc.id || npc.name || "villager");
++      let h = 0;
++      for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
++      npc.offerWork = ((h ^ (Math.round(npc.age || 30) * 7)) & 1) === 0;
++    }
++    return npc.offerWork;
++  }
++
+   function options(npc, st) {
+     const o = [];
+     if (npc.quest) {
+       if (npc.quest.state === "offered") o.push({ k: "quest", label: `"${npc.quest.title}" — tell me more.`, act: "accept" });
+       else if (npc.quest.state === "active") o.push({ k: "quest", label: `About "${npc.quest.title}"...`, act: "progress" });
+       else if (npc.quest.state === "ready") o.push({ k: "quest", label: `I've done it. "${npc.quest.title}".`, act: "complete" });
+-    } else if (npc.questHub || npc.relP > 15 || EH.chance(0.5)) {
++    } else if (npc.questHub || npc.relP > 15 || offersWork(npc)) {
+       o.push({ k: "quest", label: "Any work that needs doing?", act: "request" });
+     }
+     if (npc.sells || npc.svc === "shop") o.push({ k: "shop", label: "Let's trade.", act: "shop" });
+diff --git a/game/js/render.js b/game/js/render.js
+index d87d451..7741631 100644
+--- a/game/js/render.js
++++ b/game/js/render.js
+@@ -4,6 +4,20 @@
+ "use strict";
+ var EH = window.EH;
+ 
++/* ── visual-only random ──────────────────────────────────────────────────
++   Rain, particles and screen shake are pure presentation. They must not draw
++   from EH.rand, which is the SEEDED SIMULATION rng: rendering runs at an
++   arbitrary frame rate, so consuming it here would make two runs of the same
++   seed diverge (and silently break the determinism the harness audits for).
++   Private xorshift, never seeded from and never written back to game state. */
++let _vs = 0x9e3779b9;
++EH.vrnd = function (a, b) {
++  _vs ^= _vs << 13; _vs ^= _vs >>> 17; _vs ^= _vs << 5; _vs |= 0;
++  const u = (_vs >>> 8) / 0x1000000;
++  if (a === undefined) return u;
++  return a + u * ((b === undefined ? 1 : b) - a);
++};
++
+ /* ══════════════════════════════════════════════════════════════
+    FLOATING TEXT (DOM overlay, projected from world space)
+    ══════════════════════════════════════════════════════════════ */
+@@ -50,8 +64,8 @@ EH.Part = (function () {
+   const list = [];
+   function burst(wx, wy, color, n) {
+     for (let i = 0; i < (n || 12); i++) {
+-      const a = EH.rand(0, EH.TAU), s = EH.rand(10, 60);
+-      list.push({ x: wx, y: wy, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 20, t: EH.rand(0.3, 0.8), c: color, g: 90 });
++      const a = EH.vrnd(0, EH.TAU), s = EH.vrnd(10, 60);
++      list.push({ x: wx, y: wy, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 20, t: EH.vrnd(0.3, 0.8), c: color, g: 90 });
+     }
+   }
+   function update(dt) { for (let i = list.length - 1; i >= 0; i--) { const p = list[i]; p.t -= dt; if (p.t <= 0) { list.splice(i, 1); continue; } p.vy += p.g * dt; p.x += p.vx * dt / EH.CFG.TW * 2; p.y += p.vy * dt / EH.CFG.TH * 2; } }
+@@ -66,6 +80,7 @@ EH.Render = (function () {
+   let cv, ctx, lc, lx;
+   let VW = EH.CFG.VW, VH = EH.CFG.VH, scale = 2;
+   let camX = 0, camY = 0;
++  let panX = 0, panY = 0;          // player's free-look offset (§1.3: the camera is yours, the Warden is not)
+   let shakeT = 0, shakeMag = 0;
+   const rain = [];
+   let rainInit = false;
+@@ -125,13 +140,28 @@ EH.Render = (function () {
+     const tx = VW / 2 - (p.x - p.y) * (TW / 2);
+     const ty = VH / 2 - (p.x + p.y) * (TH / 2) + 12;
+     const k = 1 - Math.pow(0.0015, dt);
+-    camX = EH.lerp(camX, tx, k); camY = EH.lerp(camY, ty, k);
+-    if (shakeT > 0) { shakeT -= dt; const m = shakeMag * (shakeT / 0.22); camX += EH.rand(-m, m); camY += EH.rand(-m, m); if (shakeT <= 0) shakeMag = 0; }
++    camX = EH.lerp(camX, tx, k) + panX; camY = EH.lerp(camY, ty, k) + panY;
++    if (shakeT > 0) { shakeT -= dt; const m = shakeMag * (shakeT / 0.22); camX += (EH.vrnd(-1, 1)) * m; camY += (EH.vrnd(-1, 1)) * m; if (shakeT <= 0) shakeMag = 0; }
++  }
++  /* Free-look: WASD / arrows slide the camera around the village without
++     moving anybody. dx,dy are −1..1 screen-space; the offset eases home when
++     you let go so the Warden is never lost off-screen for long. */
++  function pan(dx, dy, dt) {
++    const S = 300 * (dt || 0.016);
++    panX = EH.clamp(panX + dx * S, -VW * 0.42, VW * 0.42);
++    panY = EH.clamp(panY + dy * S, -VH * 0.42, VH * 0.42);
++  }
++  function recenter(dt) {
++    const k = 1 - Math.pow(0.02, dt || 0.016);
++    if (Math.abs(panX) < 0.5 && Math.abs(panY) < 0.5) { panX = 0; panY = 0; return false; }
++    panX = EH.lerp(panX, 0, k); panY = EH.lerp(panY, 0, k);
++    return true;
+   }
+   function snapCam(st) {
+     const p = st.player;
+     camX = VW / 2 - (p.x - p.y) * (TW / 2);
+     camY = VH / 2 - (p.x + p.y) * (TH / 2) + 12;
++    panX = 0; panY = 0;
+   }
+ 
+   /* ══════════════════════════════════════════════════════════
+@@ -173,10 +203,22 @@ EH.Render = (function () {
+     actors.push({ k: "pl", o: st.player });
+     for (const a of actors) put(Math.round(a.o.x + a.o.y), a);
+ 
+-    // ── tile pass (painter's order, one diagonal at a time) ──
++    /* ══ TWO-PASS PAINTER'S ALGORITHM ══════════════════════════════
++       PASS 1 draws ONLY flat ground. Ground has no height, so it must never
++       paint over a character standing on a tile behind it. The old single
++       pass drew each diagonal's tiles then that diagonal's actors — which let
++       the NEXT diagonal's ground diamond (its top vertex sits ~8px above the
++       actor's feet) cover the actor's legs. That was the reported "tiles in
++       front of characters" bug.
++       PASS 2 draws everything WITH height — wall faces, trees, rocks, chests,
++       portals, buildings, characters — strictly depth-sorted, so tall things
++       still correctly occlude each other.
++       ══════════════════════════════════════════════════════════════ */
+     const S = map.w + map.h;
+     const lights = [];
+     const chestAt = dungeon ? new Map(st.dmap.chests.map(c => [c.x + "," + c.y, c])) : null;
++
++    // PASS 1 — flat ground + collect tall items into depth buckets
+     for (let s = 0; s < S; s++) {
+       const x0 = Math.max(0, s - map.h + 1), x1 = Math.min(map.w - 1, s);
+       for (let x = x0; x <= x1; x++) {
+@@ -193,43 +235,36 @@ EH.Render = (function () {
+         }
+         const def = EH.tileDef(id);
+         const v = map.v[map.i(x, y)];
+-        // walls get a raised side face
+-        if (def.kind === "x") {
+-          const hgt = dungeon ? 14 : 10;
+-          ctx.drawImage(EH.Art.wallSide(id, v, hgt), sp.x - TW / 2, sp.y - TH / 2);
+-        } else {
+-          const anim = def.anim ? Math.floor(st.time.real * 3) % 4 : v;
+-          ctx.drawImage(EH.Art.tile(id, anim), sp.x - TW / 2, sp.y - TH / 2);
+-        }
+-        // objects on the tile
+-        if (def.obj) {
+-          const o = def.obj === "chest" ? null : def.obj;
+-          if (o) {
+-            const spr = EH.Art.obj(o, v, { season: st.time.season, c: def.pal });
+-            ctx.drawImage(spr, sp.x - 16, sp.y + TH / 2 - 48);
+-          }
+-        }
+-        // chests & portals & dungeon stairs
++        const anim = def.anim ? Math.floor(st.time.real * 3) % 4 : v;
++        ctx.drawImage(EH.Art.tile(id, anim), sp.x - TW / 2, sp.y - TH / 2);
++        if (dungeon && id === EH.T.SLAVA) lights.push({ x: x + 0.5, y: y + 0.5, r: 2.4, c: [255, 130, 50], a: 0.8 });
++        // anything with height is deferred to the depth-sorted pass
++        if (def.kind === "x") put(s, { pr: 0, k: "wall", x, y, id, v });
++        if (def.obj && def.obj !== "chest") put(s, { pr: 0, k: "obj", x, y, o: def.obj, v, pal: def.pal });
+         if (dungeon) {
+           const ch = chestAt ? chestAt.get(x + "," + y) : null;
+-          if (ch && !ch.opened) ctx.drawImage(EH.Art.obj("chest", 0, { opened: ch.opened }), sp.x - 16, sp.y + TH / 2 - 48);
+-          if (id === EH.T.DSTAIRS) ctx.drawImage(EH.Art.obj("stairs", 0), sp.x - 16, sp.y + TH / 2 - 48);
+-          if (id === EH.T.DPORTAL) ctx.drawImage(EH.Art.obj("portal", 0, { t: st.time.real }), sp.x - 16, sp.y + TH / 2 - 48);
+-          if (id === EH.T.SLAVA) lights.push({ x: x + 0.5, y: y + 0.5, r: 2.4, c: [255, 130, 50], a: 0.8 });
++          if (ch && !ch.opened) put(s, { pr: 0, k: "spr", x, y, f: () => EH.Art.obj("chest", 0, { opened: ch.opened }) });
++          if (id === EH.T.DSTAIRS) put(s, { pr: 0, k: "spr", x, y, f: () => EH.Art.obj("stairs", 0) });
++          if (id === EH.T.DPORTAL) put(s, { pr: 0, k: "spr", x, y, f: () => EH.Art.obj("portal", 0, { t: st.time.real }) });
+         } else if (id === EH.T.DPORTAL) {
+-          ctx.drawImage(EH.Art.obj("portal", 0, { t: st.time.real }), sp.x - 16, sp.y + TH / 2 - 48);
++          put(s, { pr: 0, k: "spr", x, y, f: () => EH.Art.obj("portal", 0, { t: st.time.real }) });
+           lights.push({ x: x + 0.5, y: y + 0.5, r: 3.2, c: [150, 100, 240], a: 0.85 });
+         }
+       }
+-      // actors standing on this diagonal are drawn after its tiles
+-      const bk = buckets.get(s);
+-      if (bk) for (const a of bk) {
+-        if (a.k === "b") drawBuilding(ctx, a.o, st);
+-        else drawActor(ctx, a, st);
++    }
++
++    // PASS 2 — depth-sorted tall things, then buildings, then actors
++    function drawBucket(bk) {
++      bk.sort((a, b) => (a.pr === undefined ? 2 : a.pr) - (b.pr === undefined ? 2 : b.pr));
++      for (const a of bk) {
++        if (a.k === "b") { drawBuilding(ctx, a.o, st); continue; }
++        if (a.k === "wall") { const sp = project(a.x, a.y); if (sp) ctx.drawImage(EH.Art.wallSide(a.id, a.v, dungeon ? 14 : 10), sp.x - TW / 2, sp.y - TH / 2); continue; }
++        if (a.k === "obj") { const sp = project(a.x, a.y); if (sp) ctx.drawImage(EH.Art.obj(a.o, a.v, { season: st.time.season, c: a.pal }), sp.x - 16, sp.y + TH / 2 - 48); continue; }
++        if (a.k === "spr") { const sp = project(a.x, a.y); if (sp) ctx.drawImage(a.f(), sp.x - 16, sp.y + TH / 2 - 48); continue; }
++        drawActor(ctx, a, st);
+       }
+     }
+-    // any actors beyond the last tile row
+-    for (let s = S; s < S + 6; s++) { const bk = buckets.get(s); if (bk) for (const a of bk) { if (a.k === "b") drawBuilding(ctx, a.o, st); else drawActor(ctx, a, st); } }
++    for (let s = 0; s < S + 6; s++) { const bk = buckets.get(s); if (bk) drawBucket(bk); }
+ 
+     EH.Part.update(dt);
+     EH.Part.draw(ctx);
+@@ -314,7 +349,7 @@ EH.Render = (function () {
+   /* ── weather particles ─────────────────────────────────────── */
+   function initWeather() {
+     rain.length = 0;
+-    for (let i = 0; i < 220; i++) rain.push({ x: EH.rand(-40, VW + 40), y: EH.rand(-20, VH), s: EH.rand(0.6, 1.5), v: EH.rand(180, 320) });
++    for (let i = 0; i < 220; i++) rain.push({ x: EH.vrnd(-40, VW + 40), y: EH.vrnd(-20, VH), s: EH.vrnd(0.6, 1.5), v: EH.vrnd(180, 320) });
+     rainInit = true;
+   }
+   function drawWeather(ctx, W, dt, st) {
+@@ -324,7 +359,7 @@ EH.Render = (function () {
+       ctx.beginPath();
+       for (const p of rain) {
+         p.y += p.v * dt * p.s; p.x -= p.v * 0.22 * dt * p.s;
+-        if (p.y > VH) { p.y = -10; p.x = EH.rand(-40, VW + 60); }
++        if (p.y > VH) { p.y = -10; p.x = EH.vrnd(-40, VW + 60); }
+         if (p.x < -40) p.x = VW + 20;
+         ctx.moveTo(p.x, p.y); ctx.lineTo(p.x - 2 * p.s, p.y + 7 * p.s);
+       }
+@@ -333,7 +368,7 @@ EH.Render = (function () {
+       ctx.fillStyle = "rgba(240,248,255,.75)";
+       for (const p of rain) {
+         p.y += p.v * 0.22 * dt * p.s; p.x += Math.sin((p.y + p.s * 100) * 0.03) * 14 * dt;
+-        if (p.y > VH) { p.y = -6; p.x = EH.rand(-40, VW + 40); }
++        if (p.y > VH) { p.y = -6; p.x = EH.vrnd(-40, VW + 40); }
+         ctx.fillRect(p.x | 0, p.y | 0, p.s > 1.1 ? 2 : 1, p.s > 1.1 ? 2 : 1);
+       }
+     } else if (W.part === "fog") {
+@@ -467,7 +502,7 @@ EH.Render = (function () {
+     }
+   }
+ 
+-  return { init, resize, draw, project, projectRaw, unproject, shake, snapCam, get scale() { return scale; }, get ctx() { return ctx; }, VW, VH };
++  return { init, resize, draw, project, projectRaw, unproject, shake, snapCam, pan, recenter, get scale() { return scale; }, get ctx() { return ctx; }, VW, VH };
+ })();
+ 
+ /* ── screen shake + level flash shims used by other modules ───── */
+diff --git a/game/js/sprites.js b/game/js/sprites.js
+index 7f8ca61..7edd537 100644
+--- a/game/js/sprites.js
++++ b/game/js/sprites.js
+@@ -749,7 +749,7 @@ EH.Art = (function () {
+      PORTRAIT (24×24 head shot for panels/dialogue)
+      ═══════════════════════════════════════════════════════════ */
+   function portrait(o) {
+-    return cached(`pf_${[o.skin, o.hair, o.cloth, o.hat, o.hatc, o.beard, o.helmet, o.helmetc, o.cls, o.sex].join("|")}`, 24, 24, (x) => {
++    const master = cached(`pf_${[o.skin, o.hair, o.cloth, o.hat, o.hatc, o.beard, o.helmet, o.helmetc, o.cls, o.sex, o.long, o.eye, o.blush].join("|")}`, 24, 24, (x) => {
+       const skin = o.skin, hair = o.hair || "#3a2a1a";
+       // backdrop
+       x.fillStyle = o.cls ? shade(EH.CLASS[o.cls].c, -0.6) : "#2f3a2a";
+@@ -782,6 +782,14 @@ EH.Art = (function () {
+         x.fillStyle = o.hatc || "#5a4a3a"; x.fillRect(4, 3, 16, 10);
+         x.fillStyle = shade(o.hatc || "#5a4a3a", -0.45); x.fillRect(6, 5, 12, 10);
+         x.fillStyle = skin; x.fillRect(7, 7, 10, 9);
++      } else if (o.hat === "cap") {
++        // hair underneath, cap over it — matches the world sprite
++        x.fillStyle = hair; x.fillRect(5, 5, 14, 4);
++        x.fillRect(5, 8, 2, 5); x.fillRect(17, 8, 2, 5);
++        if (o.long) { x.fillRect(4, 8, 2, 10); x.fillRect(18, 8, 2, 10); }
++        x.fillStyle = o.hatc || "#8c6a3a"; x.fillRect(5, 2, 14, 5);
++        x.fillStyle = shade(o.hatc || "#8c6a3a", 0.22); x.fillRect(6, 2, 12, 2);
++        x.fillStyle = shade(o.hatc || "#8c6a3a", -0.3); x.fillRect(3, 6, 18, 2);
+       } else {
+         x.fillStyle = hair; x.fillRect(5, 3, 14, 5);
+         x.fillRect(5, 6, 2, 7); x.fillRect(17, 6, 2, 7);
+@@ -799,6 +807,15 @@ EH.Art = (function () {
+       x.fillStyle = "#8a4a3a"; x.fillRect(10, 15, 4, 1);
+       if (o.blush) { x.fillStyle = "rgba(224,138,122,.5)"; x.fillRect(7, 13, 2, 1); x.fillRect(15, 13, 2, 1); }
+     });
++    /* A DOM node can only have one parent. The cached canvas is shared, so
++       appending it to a second container silently stole it out of the first —
++       the villager roster and the dialogue box were fighting over the same
++       element and portraits blinked or vanished. Hand back the master only
++       while it is unattached; otherwise blit a private copy. */
++    if (!(master.parentNode || master.parentElement)) return master;
++    const own = mk(24, 24);
++    own.x.drawImage(master, 0, 0);
++    return own.cv;
+   }
+ 
+   /* ── resource icons for the top bar ───────────────────────── */
+diff --git a/game/js/ui.js b/game/js/ui.js
+index 4bafb45..17253f6 100644
+--- a/game/js/ui.js
++++ b/game/js/ui.js
+@@ -62,7 +62,11 @@ EH.UI = (function () {
+     else if (act === "skill2") { const s = EH.CLASS[p.cls].skills.find(s => s.lvl <= p.level && s.k !== EH.CLASS[p.cls].skills[0].k); if (s) EH.Combat.useSkill(st, s.k); else EH.toast("No second skill yet"); }
+     else if (act === "potion") usePotion();
+     else if (act === "recall") { if (st.map.kind === "dungeon") EH.Combat.exitDungeon(st); else EH.toast("You're already home."); }
+-    else if (act === "auto") { st.auto = !st.auto; if (st.auto && st.map.kind === "town") { EH.Combat.enterDungeon(st, st.dungeon.maxFloor || 1); } EH.toast(st.auto ? "AUTO-EXPLORE ON" : "AUTO-EXPLORE OFF"); syncAll(); }
++    else if (act === "delve") {
++      if (st.map.kind === "dungeon") { EH.toast("Already in the Hollowdeep — R to recall"); return; }
++      st.delve = true; st.idleT = 0; st.recallT = 0;
++      EH.toast("The Warden sets out for the Hollowdeep"); syncAll();
++    }
+   }
+   function usePotion() {
+     const pots = st.player.inv.filter(e => !e.eq && e.kind === "potion").sort((a, b) => (a.def.heal || 0) - (b.def.heal || 0));
+@@ -84,7 +88,7 @@ EH.UI = (function () {
+       if (map[k]) { e.preventDefault(); if (map[k] === "logsize") toggleLog(); else toggle(map[k]); return; }
+       if (k === "e") { e.preventDefault(); EH.Game.interact(); return; }
+       if (k === " ") { e.preventDefault(); const m = EH.Combat.nearestMon(st, st.player.x, st.player.y, 4); if (m) { st.focus = m; EH.Combat.playerAttack(st, m, {}); } return; }
+-      if (k === "f") { e.preventDefault(); hotbar("auto"); return; }
++      if (k === "f") { e.preventDefault(); hotbar("delve"); return; }
+       if (k === "r") { e.preventDefault(); hotbar("recall"); return; }
+       if (k === "1") { hotbar("skill1"); return; }
+       if (k === "2") { hotbar("skill2"); return; }
+@@ -172,7 +176,7 @@ EH.UI = (function () {
+     hks[1].querySelector(".nm").textContent = s2 ? s2.n : "—";
+     hks[1].classList.toggle("cd", !!s2 && (p.cd && p.cd[s2.k] > 0));
+     hks[0].classList.toggle("cd", !!(p.cd && p.cd[C.skills[0].k] > 0));
+-    hks[4].classList.toggle("on", !!st.auto);
++    if (hks[4]) hks[4].classList.toggle("on", !!(st.delve || st.map.kind === "dungeon"));
+     // party
+     const pb = document.getElementById("partybox");
+     pb.innerHTML = "";
+@@ -911,7 +915,8 @@ EH.UI = (function () {
+ 
+     const sec2 = EH.el("div", "sec");
+     sec2.innerHTML = `<h3>CONTROLS</h3>`;
+-    const keys = [["WASD / Arrows", "Move"], ["Left click", "Walk · attack · interact"], ["E", "Talk to nearest villager"], ["Space", "Attack nearest foe"], ["1 / 2 / 3", "Skill · Skill · Potion"], ["F", "Toggle auto-explore"], ["R", "Recall to town"], ["C I B T Q P", "Panels"], ["+ / −", "Game speed"], ["Esc", "Close"]];
++    const keys = [["WASD / Arrows", "Pan the camera (the Warden stays put)"], ["Left click", "Talk · build · delve — an order, not a joystick"], ["E", "Talk to the nearest villager"], ["Space", "Strike the nearest foe"], ["1 / 2 / 3", "Skill · Skill · Potion"], ["F", "Send the Warden to the Hollowdeep"], ["R", "Recall to the village"], ["C I B T Q P", "Panels"], ["+ / −", "Game speed"], ["Esc", "Close"]];
++    sec2.innerHTML += `<p style="font-size:10.5px;color:#a89880;line-height:1.5;margin:6px 0 0">You never steer the Warden directly. Movement, targeting and spell choice are the Warden's own — your levers are orders, gear, consumables and buildings.</p>`;
+     const g = EH.el("div", "statgrid");
+     for (const [k, v] of keys) { const r = EH.el("div", "statline"); r.innerHTML = `<span class="sn" style="color:var(--gold2);font-weight:700">${k}</span><span class="sv" style="font-weight:400;font-size:10px;color:#a89880">${v}</span>`; g.appendChild(r); }
+     sec2.appendChild(g); host.appendChild(sec2);
+@@ -955,6 +960,7 @@ EH.UI = (function () {
+       </div>
+       <div id="dlg-opts"></div>
+       <div id="dlg-shop"></div>`;
++    d.dataset.spoken = ""; d.dataset.optSig = "";   // stale state from the last villager
+     document.getElementById("dlg-portrait").appendChild(EH.Art.portrait(npc.look));
+     refreshDialogue(true);
+     // step closer
+@@ -975,12 +981,21 @@ EH.UI = (function () {
+       document.getElementById("dlg-text").innerHTML = EH.esc(EH.NPCs.greeting(npc, st));
+       d.dataset.spoken = "1";
+     }
++    /* syncAll() runs ~8×/s and lands here. Rebuilding the option buttons on
++       every tick destroyed the element under the cursor (clicks fell through)
++       and made the box visibly jitter, so rebuild only when the option list
++       actually changed. */
+     const opts = document.getElementById("dlg-opts");
+-    opts.innerHTML = "";
+-    for (const o of EH.NPCs.options(npc, st)) {
+-      const b = EH.el("button", o.k, EH.esc(o.label));
+-      b.addEventListener("click", () => doOption(o.act));
+-      opts.appendChild(b);
++    const list = EH.NPCs.options(npc, st);
++    const sig = list.map(o => o.k + "|" + o.act + "|" + o.label).join("~");
++    if (sig !== d.dataset.optSig) {
++      d.dataset.optSig = sig;
++      opts.innerHTML = "";
++      for (const o of list) {
++        const b = EH.el("button", o.k, EH.esc(o.label));
++        b.addEventListener("click", () => doOption(o.act));
++        opts.appendChild(b);
++      }
+     }
+   }
+   function setText(t) { const e = document.getElementById("dlg-text"); if (e) e.innerHTML = t; }
+diff --git a/tools/domstub.js b/tools/domstub.js
+index 175ebaf..51f1468 100644
+--- a/tools/domstub.js
++++ b/tools/domstub.js
+@@ -91,10 +91,15 @@ class El {
+   get firstElementChild() { return this.children[0] || null; }
+   get childElementCount() { return this.children.length; }
+   get parentElement() { return this._parent || null; }
++  get parentNode() { return this._parent || null; }
+   getBoundingClientRect() { return { left: 0, top: 0, width: 1280, height: 720, right: 1280, bottom: 720, x: 0, y: 0 }; }
+   getContext() { return this._ctx; }
+-  appendChild(c) { if (c) { c._parent = this; this.children.push(c); registerTree(c); } return c; }
+-  prepend(c) { if (c) { c._parent = this; this.children.unshift(c); registerTree(c); } return c; }
++  /* Faithful DOM: a node has exactly ONE parent, so appending an already
++     attached node MOVES it. The stub used to allow the same node in two
++     parents, which hid a genuine bug — the shared cached portrait canvas was
++     silently stolen out of the villager roster by the dialogue box. */
++  appendChild(c) { if (c) { detach(c); c._parent = this; this.children.push(c); registerTree(c); } return c; }
++  prepend(c) { if (c) { detach(c); c._parent = this; this.children.unshift(c); registerTree(c); } return c; }
+   insertBefore(c) { return this.appendChild(c); }
+   insertAdjacentHTML(pos, html) {
+     const kids = parseHTML(String(html || ""));
+@@ -136,6 +141,7 @@ class El {
+ }
+ function camelize(s) { return s.replace(/-([a-z])/g, (m, c) => c.toUpperCase()); }
+ /* detaching a subtree must drop its ids from the document, as in a browser */
++function detach(el) { const p = el._parent; if (!p) return; const i = p.children.indexOf(el); if (i >= 0) p.children.splice(i, 1); el._parent = null; }
+ function unregisterTree(el) { walk(el, n => { if (n._id && byId.get(n._id) === n) byId.delete(n._id); }); if (el._id && byId.get(el._id) === el) byId.delete(el._id); }
+ function registerTree(el) { walk(el, n => { if (n._id) byId.set(n._id, n); }); if (el._id) byId.set(el._id, el); }
+ 
+diff --git a/tools/smoke.js b/tools/smoke.js
+index 8cdf5ab..7c92bc7 100644
+--- a/tools/smoke.js
++++ b/tools/smoke.js
+@@ -427,6 +427,16 @@ chk("monster AI moves and attacks", () => {
+   if (!spot) throw new Error("no reachable tile near the monster");
+   st.player.x = spot.x; st.player.y = spot.y; st.player.path = [];
+   const atk0 = st.derived.atk; st.derived.atk = 0; // the tester does not fight back
++  /* §1.3 changed the ground rules here: the Warden is ALWAYS auto-fighting and
++     auto-exploring now (game.js autoWarden). Left alone it would snare, chip and
++     eventually kill the isolated monster and then wander off to the stairs, so
++     this check would measure the Warden's AI instead of the monster's. Silence
++     the Warden for the duration of the duel — no swings, no skills, no
++     exploring, no descending — and restore everything afterwards. */
++  const cd0 = st.derived.atkCd, autoT0 = st.player.autoT, stay0 = st.dungeon.stayOnFloor, pcd0 = Object.assign({}, st.player.cd);
++  st.derived.atkCd = 1e6; st.player.autoT = 1e6; st.dungeon.stayOnFloor = true;
++  const silence = () => { for (const sk of EH.CLASS[st.player.cls].skills) st.player.cd[sk.k] = 1e6; };
++  silence();
+   /* ...and does not defend either. By this point the suite has the player near
+      Lv90, so dodge and dmgReduce can swallow every swing and regen can erase a
+      landed hit inside a single frame — which measures the tester's build, not
+@@ -437,12 +447,14 @@ chk("monster AI moves and attacks", () => {
+   let dealt = 0;
+   for (let i = 0; i < 400; i++) {
+     st.player.hp = st.derived.hpMax;               // immortal tester
++    silence();
+     frames(1 / 30);
+     if (st.map.kind !== "dungeon") throw new Error("tester was sent home mid-duel");
+     if (st.player.hp < st.derived.hpMax) dealt++;
+   }
+   st.derived.atk = atk0;
+   st.derived.dodge = d0; st.derived.dmgReduce = dr0; st.derived.regen = rg0;
++  st.derived.atkCd = cd0; st.player.autoT = autoT0; st.dungeon.stayOnFloor = stay0; st.player.cd = pcd0;
+   const moved = Math.abs(m.x - x0) + Math.abs(m.y - y0);
+   if (moved < 0.5) throw new Error("monster never moved");
+   if (!dealt) throw new Error("monster never landed a hit");
+@@ -1080,6 +1092,128 @@ chk("every job has a training profile (§6.1)", () => {
+ });
+ EH.Game.st = st;   // restore the main state for anything appended later
+ 
++/* ── 16. §1.3 NO DIRECT CONTROL + the two rendering/UI bugs from playtest ── */
++out("\n§1.3 NO DIRECT CONTROL (playtest feedback 1)\n");
++
++chk("held WASD / arrow keys cannot move the Warden one pixel", () => {
++  const s = EH.Game.newState("Hands-off", "warden", 90210);
++  EH.Game.st = s; EH.Game.setupWorld(false); EH.Render.snapCam(s);
++  /* Freeze every autonomous reason to move so the only possible movement would
++     come from the keyboard: no delve, no idle countdown, no stroll, no order. */
++  s.delve = false; s.idleT = -1e9; s.strollT = 1e9; s.recallT = 0;
++  s.pendingInteract = null; s.placing = null; s.player.path = [];
++  const x0 = s.player.x, y0 = s.player.y;
++  for (const k of ["w", "a", "s", "d", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]) __winDispatch("keydown", { key: k });
++  let autoOff = 0;
++  for (let i = 0; i < 600; i++) { EH.Game.update(1 / 60); if (!s.auto) autoOff++; }
++  for (const k of ["w", "a", "s", "d", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]) __winDispatch("keyup", { key: k });
++  const moved = Math.abs(s.player.x - x0) + Math.abs(s.player.y - y0);
++  if (moved > 1e-9) throw new Error(`10 s of held keys moved the Warden ${moved.toFixed(3)} tiles — §1.3 forbids direct control`);
++  if (autoOff) throw new Error(`st.auto was false on ${autoOff}/600 frames — the auto-Warden must never switch off`);
++  if (!EH.Game.st.auto) throw new Error("auto flag lost");
++  return "10 s of held WASD + arrows = 0.000 tiles moved · st.auto true on all 600 frames";
++});
++
++chk("clicking empty ground is not a walk order", () => {
++  const s = EH.Game.st;
++  s.delve = false; s.idleT = -1e9; s.strollT = 1e9; s.pendingInteract = null; s.player.path = [];
++  const x0 = s.player.x, y0 = s.player.y;
++  /* every walkable tile on the map, clicked through the public world-click path
++     where one exists — the contract is that none of them issues a move order */
++  const cv = document.querySelector("canvas");
++  if (!cv || !cv.dispatch) throw new Error("no canvas to click");
++  for (let i = 0; i < 40; i++) {
++    const sp = EH.Render.project(s.player.x + (i % 7) - 3, s.player.y + ((i / 7) | 0) - 3);
++    if (!sp) continue;
++    cv.dispatch("pointerdown", { button: 0, clientX: sp.x / (EH.Render.scale || 1), clientY: sp.y / (EH.Render.scale || 1) });
++    EH.Game.update(1 / 60);
++  }
++  if (s.player.path.length) throw new Error("a click on open ground queued a path — the Warden would walk off under its own steam");
++  const moved = Math.abs(s.player.x - x0) + Math.abs(s.player.y - y0);
++  if (moved > 1e-9) throw new Error(`ground clicks moved the Warden ${moved.toFixed(3)} tiles`);
++  return "40 clicks on open ground: no path queued, no movement";
++});
++
++chk("§1.3 the Warden plays itself — left alone in the village it delves on its own", () => {
++  const s = EH.Game.newState("Idlehands", "warden", 5150);
++  EH.Game.st = s; EH.Game.setupWorld(false); EH.Render.snapCam(s);
++  s.delve = false; s.idleT = 0; s.recallT = 0; s.strollT = 0; s.player.path = [];
++  const x0 = s.player.x, y0 = s.player.y;
++  let entered = -1, strolled = false, farthest = 0;
++  for (let i = 0; i < 60 * 120 && entered < 0; i++) {
++    EH.Game.update(1 / 60);
++    if (s.map.kind === "dungeon") { entered = i / 60; break; }
++    farthest = Math.max(farthest, Math.abs(s.player.x - x0) + Math.abs(s.player.y - y0));
++    if (farthest > 1.2) strolled = true;
++  }
++  if (entered < 0) throw new Error("120 s of no input and the Warden never reached the Hollowdeep — the loop stalls without a player");
++  if (!strolled) throw new Error("the Warden stood frozen in the village instead of staying visible and reachable");
++  return `descended unaided after ${entered.toFixed(0)} s (floor ${s.dungeon.floor}) · strolled up to ${farthest.toFixed(1)} tiles while waiting`;
++});
++
++out("\nRENDER + DIALOGUE (playtest feedback 2 & 3)\n");
++
++chk("ground is painted before anything with height — tiles can never cover a character", () => {
++  const s = EH.Game.st;
++  if (s.map.kind !== "town") { EH.Game.setupWorld(false); }
++  EH.Render.snapCam(s);
++  const ctx = EH.Render.ctx;
++  if (!ctx) throw new Error("renderer has no context");
++  /* Catalogue every ground-tile canvas this map can ask for, so each drawImage
++     can be classified as flat ground or something with height. */
++  const tiles = new Set();
++  for (const id of new Set(s.map.t)) for (let v = 0; v < 8; v++) { const c = EH.Art.tile(id, v); if (c) tiles.add(c); }
++  if (tiles.size < 4) throw new Error("only " + tiles.size + " tile canvases — cannot classify the draw order");
++  const seq = [];
++  const real = ctx.drawImage;
++  ctx.drawImage = function (img) { seq.push(tiles.has(img) ? "g" : "o"); return real.apply(this, arguments); };
++  try { EH.Render.draw(s, 1 / 60); } finally { ctx.drawImage = real; }
++  const g = seq.filter(c => c === "g").length, o = seq.length - g;
++  const lastGround = seq.lastIndexOf("g"), firstRaised = seq.indexOf("o");
++  if (!g) throw new Error("no ground was drawn at all");
++  if (!o) throw new Error("nothing with height was drawn — no buildings, props or characters on screen?");
++  if (lastGround > firstRaised) {
++    throw new Error(`${seq.slice(0, lastGround + 1).filter(c => c === "o").length} raised draw(s) happened before the last ground tile (index ${lastGround} of ${seq.length}) — the next diagonal's diamond would paint over a character's legs`);
++  }
++  return `${g} ground tiles then ${o} raised draws, strictly in that order`;
++});
++
++chk("dialogue options no longer re-roll every UI refresh (the Mara/Sylvie jitter)", () => {
++  const s = EH.Game.st;
++  for (const id of ["mara", "sylvie"]) {
++    const n = EH.NPCs.byId(s, id);
++    if (!n) throw new Error("no villager " + id);
++    n.quest = null; n.relP = 0;                       // the flickering case: no quest, low regard
++    const sig = () => EH.NPCs.options(n, s).map(o => o.k + o.act + o.label).join("|");
++    const first = sig();
++    for (let i = 0; i < 200; i++) if (sig() !== first) throw new Error(`${id}'s option list changed on call ${i} — it is re-rolling a random number on every refresh`);
++    EH.UI.dialogue(n);
++    const row = document.getElementById("dlg-opts");
++    if (!row || !row.children.length) throw new Error(id + ": dialogue produced no options");
++    const b0 = row.children[0];
++    for (let i = 0; i < 40; i++) { EH.Game.update(1 / 60); EH.UI.syncAll(); }
++    if (row.children[0] !== b0) throw new Error(`${id}: the option buttons were rebuilt under the cursor ${row.children.length}× — clicks would fall through`);
++    EH.UI.closeDialogue();
++  }
++  return "mara + sylvie: 200 identical option reads each, buttons untouched across 40 syncAll() ticks";
++});
++
++chk("a portrait canvas is never stolen out of a container it is already in", () => {
++  const def = EH.NPCDEF.find(d => d.id === "sylvie");
++  const a = EH.Art.portrait(def.look);
++  const hostA = new __El("div"); hostA.appendChild(a);
++  const b = EH.Art.portrait(def.look);
++  if (b === a) throw new Error("the same cached canvas was handed to two containers — appending it to the dialogue box would silently empty the villager roster");
++  const hostB = new __El("div"); hostB.appendChild(b);
++  if (hostA.children.length !== 1 || hostA.children[0] !== a) throw new Error("the first container lost its portrait");
++  if (hostB.children.length !== 1 || hostB.children[0] !== b) throw new Error("the second container lost its portrait");
++  /* and the cache must key on every field the drawing reads */
++  const short = EH.Art.portrait(Object.assign({}, def.look, { long: false, hat: null }));
++  const long = EH.Art.portrait(Object.assign({}, def.look, { long: true, hat: null }));
++  if (short === long) throw new Error("long hair and short hair share one cached portrait — the cache key is missing o.long");
++  return "two attached containers keep their own canvases · long/short hair cache separately";
++});
++
+ /* ── result ─────────────────────────────────────────────────── */
+ out("\n══ RESULT ══\n");
+ if (errors.length) {

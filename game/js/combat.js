@@ -153,7 +153,7 @@ EH.Combat = (function () {
     // summon on death
     if (mon.summon && EH.chance(0.3) && st.mons.length < 40) {
       const def = EH.monById(mon.summon);
-      if (def) { const s = makeMon(def, st.dmap.floor, {}); s.x = mon.x; s.y = mon.y; s.home = { x: s.x, y: s.y }; st.mons.push(s); }
+      if (def && st.dmap) { const s = makeMon(def, st.dungeon.floor, {}); s.x = mon.x; s.y = mon.y; s.home = { x: s.x, y: s.y }; st.mons.push(s); }
     }
   }
 
@@ -417,9 +417,15 @@ EH.Combat = (function () {
             else EH.log(`${tgt.name} is down! Lira can revive them at the chapel.`, "bad");
           }
         }
+        /* A lethal swing can down the Warden, and being downed tears the
+           dungeon down mid-call: exitDungeon() nulls st.dmap and empties
+           st.mons while this function is still on the stack. Anything after
+           the attack has to re-check, or it dereferences a null map — the
+           summoner below used to crash the whole frame exactly this way. */
+        if (!st.dmap || st.map.kind !== "dungeon") return;
         if (m.summon && EH.chance(0.12) && st.mons.length < 42) {
           const def2 = EH.monById(m.summon);
-          if (def2) { const s = makeMon(def2, st.dmap.floor, {}); s.x = m.x + EH.rand(-1, 1); s.y = m.y + EH.rand(-1, 1); s.home = { x: s.x, y: s.y }; st.mons.push(s); }
+          if (def2) { const s = makeMon(def2, st.dungeon.floor, {}); s.x = m.x + EH.rand(-1, 1); s.y = m.y + EH.rand(-1, 1); s.home = { x: s.x, y: s.y }; st.mons.push(s); }
         }
       }
     } else {
@@ -600,7 +606,9 @@ EH.Combat = (function () {
     st.prevMap = st.map;
     st.dmap = null;
     st.mons = [];
-    st.auto = false;
+    st.auto = true;                       // §1.3 — there is no manual mode to fall back to
+    st.delve = false; st.idleT = 0;
+    st.recallT = wounded ? 60 : 8;        // catch a breath before the next descent
     st.focus = null;
     const k = st.map.dungeonPortal;
     st.player.x = k ? k.x + 1 : st.town.plaza.x; st.player.y = k ? k.y + 1 : st.town.plaza.y;

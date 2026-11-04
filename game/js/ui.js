@@ -62,7 +62,11 @@ EH.UI = (function () {
     else if (act === "skill2") { const s = EH.CLASS[p.cls].skills.find(s => s.lvl <= p.level && s.k !== EH.CLASS[p.cls].skills[0].k); if (s) EH.Combat.useSkill(st, s.k); else EH.toast("No second skill yet"); }
     else if (act === "potion") usePotion();
     else if (act === "recall") { if (st.map.kind === "dungeon") EH.Combat.exitDungeon(st); else EH.toast("You're already home."); }
-    else if (act === "auto") { st.auto = !st.auto; if (st.auto && st.map.kind === "town") { EH.Combat.enterDungeon(st, st.dungeon.maxFloor || 1); } EH.toast(st.auto ? "AUTO-EXPLORE ON" : "AUTO-EXPLORE OFF"); syncAll(); }
+    else if (act === "delve") {
+      if (st.map.kind === "dungeon") { EH.toast("Already in the Hollowdeep — R to recall"); return; }
+      st.delve = true; st.idleT = 0; st.recallT = 0;
+      EH.toast("The Warden sets out for the Hollowdeep"); syncAll();
+    }
   }
   function usePotion() {
     const pots = st.player.inv.filter(e => !e.eq && e.kind === "potion").sort((a, b) => (a.def.heal || 0) - (b.def.heal || 0));
@@ -84,7 +88,7 @@ EH.UI = (function () {
       if (map[k]) { e.preventDefault(); if (map[k] === "logsize") toggleLog(); else toggle(map[k]); return; }
       if (k === "e") { e.preventDefault(); EH.Game.interact(); return; }
       if (k === " ") { e.preventDefault(); const m = EH.Combat.nearestMon(st, st.player.x, st.player.y, 4); if (m) { st.focus = m; EH.Combat.playerAttack(st, m, {}); } return; }
-      if (k === "f") { e.preventDefault(); hotbar("auto"); return; }
+      if (k === "f") { e.preventDefault(); hotbar("delve"); return; }
       if (k === "r") { e.preventDefault(); hotbar("recall"); return; }
       if (k === "1") { hotbar("skill1"); return; }
       if (k === "2") { hotbar("skill2"); return; }
@@ -172,7 +176,7 @@ EH.UI = (function () {
     hks[1].querySelector(".nm").textContent = s2 ? s2.n : "—";
     hks[1].classList.toggle("cd", !!s2 && (p.cd && p.cd[s2.k] > 0));
     hks[0].classList.toggle("cd", !!(p.cd && p.cd[C.skills[0].k] > 0));
-    hks[4].classList.toggle("on", !!st.auto);
+    if (hks[4]) hks[4].classList.toggle("on", !!(st.delve || st.map.kind === "dungeon"));
     // party
     const pb = document.getElementById("partybox");
     pb.innerHTML = "";
@@ -911,7 +915,8 @@ EH.UI = (function () {
 
     const sec2 = EH.el("div", "sec");
     sec2.innerHTML = `<h3>CONTROLS</h3>`;
-    const keys = [["WASD / Arrows", "Move"], ["Left click", "Walk · attack · interact"], ["E", "Talk to nearest villager"], ["Space", "Attack nearest foe"], ["1 / 2 / 3", "Skill · Skill · Potion"], ["F", "Toggle auto-explore"], ["R", "Recall to town"], ["C I B T Q P", "Panels"], ["+ / −", "Game speed"], ["Esc", "Close"]];
+    const keys = [["WASD / Arrows", "Pan the camera (the Warden stays put)"], ["Left click", "Talk · build · delve — an order, not a joystick"], ["E", "Talk to the nearest villager"], ["Space", "Strike the nearest foe"], ["1 / 2 / 3", "Skill · Skill · Potion"], ["F", "Send the Warden to the Hollowdeep"], ["R", "Recall to the village"], ["C I B T Q P", "Panels"], ["+ / −", "Game speed"], ["Esc", "Close"]];
+    sec2.innerHTML += `<p style="font-size:10.5px;color:#a89880;line-height:1.5;margin:6px 0 0">You never steer the Warden directly. Movement, targeting and spell choice are the Warden's own — your levers are orders, gear, consumables and buildings.</p>`;
     const g = EH.el("div", "statgrid");
     for (const [k, v] of keys) { const r = EH.el("div", "statline"); r.innerHTML = `<span class="sn" style="color:var(--gold2);font-weight:700">${k}</span><span class="sv" style="font-weight:400;font-size:10px;color:#a89880">${v}</span>`; g.appendChild(r); }
     sec2.appendChild(g); host.appendChild(sec2);
@@ -955,6 +960,7 @@ EH.UI = (function () {
       </div>
       <div id="dlg-opts"></div>
       <div id="dlg-shop"></div>`;
+    d.dataset.spoken = ""; d.dataset.optSig = "";   // stale state from the last villager
     document.getElementById("dlg-portrait").appendChild(EH.Art.portrait(npc.look));
     refreshDialogue(true);
     // step closer
@@ -975,12 +981,21 @@ EH.UI = (function () {
       document.getElementById("dlg-text").innerHTML = EH.esc(EH.NPCs.greeting(npc, st));
       d.dataset.spoken = "1";
     }
+    /* syncAll() runs ~8×/s and lands here. Rebuilding the option buttons on
+       every tick destroyed the element under the cursor (clicks fell through)
+       and made the box visibly jitter, so rebuild only when the option list
+       actually changed. */
     const opts = document.getElementById("dlg-opts");
-    opts.innerHTML = "";
-    for (const o of EH.NPCs.options(npc, st)) {
-      const b = EH.el("button", o.k, EH.esc(o.label));
-      b.addEventListener("click", () => doOption(o.act));
-      opts.appendChild(b);
+    const list = EH.NPCs.options(npc, st);
+    const sig = list.map(o => o.k + "|" + o.act + "|" + o.label).join("~");
+    if (sig !== d.dataset.optSig) {
+      d.dataset.optSig = sig;
+      opts.innerHTML = "";
+      for (const o of list) {
+        const b = EH.el("button", o.k, EH.esc(o.label));
+        b.addEventListener("click", () => doOption(o.act));
+        opts.appendChild(b);
+      }
     }
   }
   function setText(t) { const e = document.getElementById("dlg-text"); if (e) e.innerHTML = t; }

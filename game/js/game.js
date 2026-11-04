@@ -39,7 +39,10 @@ EH.Game = (function () {
       quests: { active: [], board: [], done: [] },
       research: [], buffs: {},
       stats: { kills: 0, goldEarned: 0, xp: 0, quests: 0, built: 0, itemsFound: 0, itemsSold: 0, legendary: 0, trades: 0, deaths: 0, playTime: 0, produced: {} },
-      auto: false, placing: null, focus: null,
+      /* §1.3 — there is no manual mode. auto is permanently on; delve/idleT/
+         recallT/strollT drive the autonomous Warden (see autoWarden()). */
+      auto: true, delve: false, idleT: 0, recallT: 0, strollT: 0, autoCdT: 0,
+      placing: null, focus: null,
       map: null, dmap: null, prevMap: null, derived: null,
       createdAt: Date.now(), lastSeen: Date.now(),
     };
@@ -159,7 +162,7 @@ EH.Game = (function () {
     EH.log("Bram Ashdown, the elder, is waiting by the well. He has work for you.", "story");
     EH.log("To the north-east, the crack in the hillside breathes cold air. That is the <b>Hollowdeep</b>.", "story");
     EH.toast("Welcome to Emberhold");
-    setTimeout(() => EH.UI.hint('Press <kbd>E</kbd> near a villager to talk · <kbd>B</kbd> to build · click to walk'), 1200);
+    setTimeout(() => EH.UI.hint('Click a villager to talk · <kbd>B</kbd> to build · the Warden fights and explores on its own'), 1200);
     const bram = EH.NPCs.byId(st, "bram");
     if (bram && !bram.quest) {
       const q = EH.Quests.generate(st, bram);
@@ -287,25 +290,12 @@ EH.Game = (function () {
   function updatePlayer(dt) {
     const p = st.player, map = st.map, D = st.derived;
     p.hurtT = Math.max(0, (p.hurtT || 0) - dt);
-    let mx = 0, my = 0;
-    // screen-relative movement mapped onto the iso grid
-    if (keys.left) mx -= 1; if (keys.right) mx += 1;
-    if (keys.up) my -= 1; if (keys.down) my += 1;
-    if (mx || my) {
-      p.path = [];
-      // iso: screen-right = (+x, -y)? screen right vector = (1,-1) normalised; screen down = (1,1)
-      const gx = (mx + my) * 0.7071, gy = (my - mx) * 0.7071;
-      const len = Math.hypot(gx, gy) || 1;
-      const nx = p.x + gx / len * D.speed * dt, ny = p.y + gy / len * D.speed * dt;
-      // axis-separated collision so you slide along walls
-      if (map.walk(Math.round(nx), Math.round(p.y))) p.x = nx;
-      if (map.walk(Math.round(p.x), Math.round(ny))) p.y = ny;
-      p.x = EH.clamp(p.x, 0.4, map.w - 1.4); p.y = EH.clamp(p.y, 0.4, map.h - 1.4);
-      p.moving = true;
-      p.dir = Math.abs(my) > Math.abs(mx) ? (my > 0 ? "front" : "back") : "side";
-      p.flip = mx < 0;
-      p.anim += dt * 8;
-    } else if (p.path && p.path.length) {
+    /* §1.3 — the player never steers the Warden, so there is deliberately no
+       manual-locomotion branch here. The only movement the Warden makes is
+       pathing the simulation issues itself: walking to a villager you clicked,
+       to a chest or stair, to the portal, or auto-exploring a floor. WASD and
+       the arrow keys pan the CAMERA instead (see frame()). */
+    if (p.path && p.path.length) {
       EH.Mover.tick(p, map, dt, D.speed);
     } else p.moving = false;
 
@@ -410,6 +400,7 @@ EH.Game = (function () {
       if (k === "arrowright" || k === "d") keys.right = true;
       if (k === "arrowup" || k === "w") keys.up = true;
       if (k === "arrowdown" || k === "s") keys.down = true;
+      if (k === "h") EH.Render.focusHero(st);   // H — snap camera to Warden
       if (["arrowleft", "arrowright", "arrowup", "arrowdown", " "].includes(k)) e.preventDefault();
     });
     window.addEventListener("keyup", e => {
@@ -420,6 +411,10 @@ EH.Game = (function () {
       if (k === "arrowdown" || k === "s") keys.down = false;
     });
     window.addEventListener("blur", () => { keys.left = keys.right = keys.up = keys.down = false; });
+
+    // ⌖ button — focus camera on Warden
+    const camFocusBtn = document.getElementById("cam-focus");
+    if (camFocusBtn) camFocusBtn.addEventListener("click", () => EH.Render.focusHero(st));
 
     cv.addEventListener("pointermove", e => {
       const w = toWorld(e.clientX, e.clientY);
@@ -449,12 +444,7 @@ EH.Game = (function () {
     if (map.kind === "dungeon") {
       let best = null, bd = 1.3;
       for (const m of st.mons) { const d = EH.dist(m.x, m.y, w.x, w.y); if (d < bd) { bd = d; best = m; } }
-      if (best) {
-        st.focus = best;
-        const D = st.derived;
-        if (EH.dist(best.x, best.y, st.player.x, st.player.y) > D.atkRange) EH.Mover.setPath(st.player, map, Math.round(best.x), Math.round(best.y), { adjacent: true });
-        return;
-      }
+      if (best) { st.focus = best; return; }   // targeting intent only; the Warden closes distance itself
       const ch = map.chests.find(c => !c.opened && EH.dist(c.x + 0.0, c.y + 0.0, w.x, w.y) < 1.0);
       if (ch) { EH.Mover.setPath(st.player, map, ch.x, ch.y, { adjacent: true }); st.pendingInteract = { kind: "chest", ref: ch }; return; }
       if (EH.dist(map.stairs.x, map.stairs.y, w.x, w.y) < 1.1) { EH.Mover.setPath(st.player, map, map.stairs.x, map.stairs.y, { adjacent: true }); st.pendingInteract = { kind: "stairs" }; return; }
@@ -481,9 +471,80 @@ EH.Game = (function () {
         return;
       }
     }
+    /* §1.3 — clicking empty ground does NOT walk the Warden. The player issues
+       intents (talk · build · delve); the simulation does all the walking. */
     st.pendingInteract = null;
-    if (map.walk(tx, ty)) EH.Mover.setPath(st.player, map, tx, ty);
   }
+  /* ══════════════════════════════════════════════════════════════
+     §1.3 — THE AUTONOMOUS WARDEN
+     With direct control removed, the Warden must be self-sufficient or the
+     game is unplayable. It casts whatever is off cooldown, drinks when hurt,
+     and — the part that makes this an idle game — walks back to the portal and
+     re-enters the dungeon on its own once recovered. The player's levers are
+     orders, gear, consumables and buildings. Never the joystick.
+     ══════════════════════════════════════════════════════════════ */
+  const DESCEND_AFTER = 40;   // seconds of village idle before the Warden delves on its own
+  const AUTO_CC = { trap: "root" };   // skill key -> the status it locks a target with
+
+  function autoWarden(dt) {
+    if (!st) return;
+    st.auto = true;                                       // §1.3 — the auto-Warden is not optional
+    st.autoCdT = (st.autoCdT || 0) - dt;
+    if (st.autoCdT > 0) return;
+    const step = 0.35 - st.autoCdT;                       // real time this tick covers
+    st.autoCdT = 0.35;
+    const p = st.player, D = st.derived;
+
+    if (st.map.kind === "dungeon") {
+      st.idleT = 0;
+      if (p.hp < D.hpMax * 0.45 && EH.UI.usePotion) EH.UI.usePotion();
+      // Never waste a snare on something already snared — addStatus would just
+      // refresh the duration and the target would stand rooted forever.
+      const tgt = st.focus || EH.Combat.nearestMon(st, p.x, p.y, 8);
+      for (const sk of EH.CLASS[p.cls].skills) {
+        if (sk.lvl > p.level || (p.cd[sk.k] || 0) > 0) continue;
+        const cc = AUTO_CC[sk.k];
+        if (cc && tgt && !tgt.dead && (tgt.statuses || []).some(x => x.k === cc)) continue;
+        if (EH.Combat.useSkill(st, sk.k)) break;
+      }
+      return;
+    }
+    // ── in the village ─────────────────────────────────────────────
+    if (st.recallT > 0) { st.recallT -= step; st.idleT = 0; return; }   // resting after a recall
+    if (st.pendingInteract || st.placing) { st.idleT = 0; return; }     // obeying an order
+    if (!st.delve) {
+      st.idleT = (st.idleT || 0) + step;
+      if (st.idleT < DESCEND_AFTER) { wardenStroll(step); return; }     // stay visible & reachable
+      if (p.hp < D.hpMax * 0.6) return;                                 // not fit to descend yet
+      st.delve = true;
+      EH.log("The Warden shoulders a pack and starts for the Hollowdeep.", "story");
+    }
+    const pk = st.map.dungeonPortal;
+    if (!pk) return;
+    if (EH.dist(p.x, p.y, pk.x, pk.y) < 2.2) {
+      st.delve = false; st.idleT = 0;
+      EH.Combat.enterDungeon(st, st.dungeon.maxFloor || 1);
+    } else if (!p.path.length) {
+      EH.Mover.setPath(p, st.map, Math.round(pk.x), Math.round(pk.y), { adjacent: true });
+    }
+  }
+
+  /* A short idle stroll around the plaza. Without direct control the Warden
+     would otherwise stand frozen (or bolt for the dungeon), so it ambles a
+     little — which also keeps every villager clickable-and-reachable. Runs in
+     the sim step, so it stays deterministic. */
+  function wardenStroll(step) {
+    const p = st.player;
+    st.strollT = (st.strollT || 0) - step;
+    if (p.path.length || st.strollT > 0) return;
+    st.strollT = EH.rand(3, 7);
+    const c = (st.town && st.town.plaza) || { x: p.x, y: p.y };
+    for (let t = 0; t < 8; t++) {
+      const tx = Math.round(c.x + EH.rand(-4, 4)), ty = Math.round(c.y + EH.rand(-4, 4));
+      if (st.map.walk(tx, ty)) { EH.Mover.setPath(p, st.map, tx, ty); return; }
+    }
+  }
+
   function checkPending() {
     const pi = st.pendingInteract; if (!pi) return;
     const p = st.player;
@@ -512,6 +573,12 @@ EH.Game = (function () {
   function tryPlace(x, y) {
     const type = st.placing; if (!type) return;
     const B = EH.BUILD[type];
+    // the village is the only buildable map — see EH.Build.mapOf
+    if (st.map.kind !== "town") {
+      EH.toast("You can only build in the village — recall first (R).");
+      EH.UI.cancelPlace();
+      return;
+    }
     // centre the footprint on the cursor
     const bx = x - Math.floor(B.w / 2), by = y - Math.floor(B.h / 2);
     if (!st.map.canPlace(bx, by, B.w, B.h)) { EH.toast("Can't build there"); EH.shake(2); return; }
@@ -548,6 +615,9 @@ EH.Game = (function () {
         if (st.map.kind === "dungeon") EH.Combat.autoExplore(st, gameDt);
       }
       EH.Combat.playerCombat(st, gameDt);
+      /* §1.3 — runs in BOTH the village and the dungeon: this is what replaces
+         the player's hands. Deliberately outside the dungeon block above. */
+      autoWarden(gameDt);
       // companions and pets are town-safe, they follow you home
       for (const c of st.companions) EH.Combat.compUpdate(c, st, gameDt);
       for (const p of st.pets) EH.Combat.petUpdate(p, st, gameDt);
@@ -615,6 +685,14 @@ EH.Game = (function () {
     while (acc >= FIXED && steps < MAX_STEPS) { update(FIXED); acc -= FIXED; steps++; }
     if (steps >= MAX_STEPS) acc = 0;           // frame took too long; abandon the debt
     st.simSteps = (st.simSteps || 0) + steps;
+    // free-look camera (presentation only — never touches the simulation)
+    {
+      let dx = 0, dy = 0;
+      if (keys.left) dx -= 1; if (keys.right) dx += 1;
+      if (keys.up) dy -= 1; if (keys.down) dy += 1;
+      if (dx || dy) EH.Render.pan(dx, dy, dt);
+      // Camera stays put when no key held — use H key or ⌖ button to re-center on Warden
+    }
     EH.Render.draw(st, dt);
     drawOverlay();
     requestAnimationFrame(frame);
@@ -700,7 +778,8 @@ EH.Game = (function () {
       quests: st.quests,
       research: st.research, buffs: {},
       stats: st.stats,
-      auto: false,
+      auto: true,        // §1.3 — the Warden is always self-driven, so offline
+                         // catch-up may keep delving (see the o.auto && o.inDungeon branch)
       chestState: st.dungeon.chestState || {},
       inDungeon: st.map.kind === "dungeon" ? st.dungeon.floor : 0,
     };

@@ -91,10 +91,15 @@ class El {
   get firstElementChild() { return this.children[0] || null; }
   get childElementCount() { return this.children.length; }
   get parentElement() { return this._parent || null; }
+  get parentNode() { return this._parent || null; }
   getBoundingClientRect() { return { left: 0, top: 0, width: 1280, height: 720, right: 1280, bottom: 720, x: 0, y: 0 }; }
   getContext() { return this._ctx; }
-  appendChild(c) { if (c) { c._parent = this; this.children.push(c); registerTree(c); } return c; }
-  prepend(c) { if (c) { c._parent = this; this.children.unshift(c); registerTree(c); } return c; }
+  /* Faithful DOM: a node has exactly ONE parent, so appending an already
+     attached node MOVES it. The stub used to allow the same node in two
+     parents, which hid a genuine bug — the shared cached portrait canvas was
+     silently stolen out of the villager roster by the dialogue box. */
+  appendChild(c) { if (c) { detach(c); c._parent = this; this.children.push(c); registerTree(c); } return c; }
+  prepend(c) { if (c) { detach(c); c._parent = this; this.children.unshift(c); registerTree(c); } return c; }
   insertBefore(c) { return this.appendChild(c); }
   insertAdjacentHTML(pos, html) {
     const kids = parseHTML(String(html || ""));
@@ -136,6 +141,7 @@ class El {
 }
 function camelize(s) { return s.replace(/-([a-z])/g, (m, c) => c.toUpperCase()); }
 /* detaching a subtree must drop its ids from the document, as in a browser */
+function detach(el) { const p = el._parent; if (!p) return; const i = p.children.indexOf(el); if (i >= 0) p.children.splice(i, 1); el._parent = null; }
 function unregisterTree(el) { walk(el, n => { if (n._id && byId.get(n._id) === n) byId.delete(n._id); }); if (el._id && byId.get(el._id) === el) byId.delete(el._id); }
 function registerTree(el) { walk(el, n => { if (n._id) byId.set(n._id, n); }); if (el._id) byId.set(el._id, el); }
 
@@ -275,7 +281,7 @@ global.localStorage = windowStub.localStorage;
 global.performance = windowStub.performance;
 global.requestAnimationFrame = () => 0;
 global.cancelAnimationFrame = noop;
-global.navigator = { userAgent: "node", platform: "linux" };
+try { global.navigator = { userAgent: "node", platform: "linux" }; } catch (_) { Object.defineProperty(global, "navigator", { value: { userAgent: "node", platform: "linux" }, writable: true, configurable: true }); }
 global.confirm = () => true;
 global.alert = noop;
 global.getComputedStyle = () => ({ getPropertyValue: () => "" });

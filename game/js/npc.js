@@ -632,13 +632,28 @@ EH.NPCs = (function () {
     return EH.pick(pool);
   }
 
+  /* Stable per-NPC coin flip. This used to be EH.chance(0.5) evaluated on every
+     UI refresh (~8×/s), so the "Any work that needs doing?" row blinked in and
+     out of the dialogue box — the reported glitch on Mara and Sylvie, the two
+     villagers with no service counter — and it burned the seeded RNG from
+     outside the simulation, which is a determinism leak. Hashed instead. */
+  function offersWork(npc) {
+    if (npc.offerWork === undefined) {
+      const s = String(npc.id || npc.name || "villager");
+      let h = 0;
+      for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+      npc.offerWork = ((h ^ (Math.round(npc.age || 30) * 7)) & 1) === 0;
+    }
+    return npc.offerWork;
+  }
+
   function options(npc, st) {
     const o = [];
     if (npc.quest) {
       if (npc.quest.state === "offered") o.push({ k: "quest", label: `"${npc.quest.title}" — tell me more.`, act: "accept" });
       else if (npc.quest.state === "active") o.push({ k: "quest", label: `About "${npc.quest.title}"...`, act: "progress" });
       else if (npc.quest.state === "ready") o.push({ k: "quest", label: `I've done it. "${npc.quest.title}".`, act: "complete" });
-    } else if (npc.questHub || npc.relP > 15 || EH.chance(0.5)) {
+    } else if (npc.questHub || npc.relP > 15 || offersWork(npc)) {
       o.push({ k: "quest", label: "Any work that needs doing?", act: "request" });
     }
     if (npc.sells || npc.svc === "shop") o.push({ k: "shop", label: "Let's trade.", act: "shop" });

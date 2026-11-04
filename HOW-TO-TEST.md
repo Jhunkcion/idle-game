@@ -1,6 +1,30 @@
-# Emberhold — M1 test build
+# Emberhold — M1.1 test build (playtest round 1 fixes)
 
 How to run it, what to look at, and what is *not* there yet.
+
+---
+
+## 0. What changed since the build you tested
+
+Your seven findings. **1–3 are fixed here; 4–7 are new scope and are *not* in this build** — they are
+written up as pending decisions in `game/docs/PRD.md` Appendix D.6.
+
+| # | You said | Status |
+|---|---|---|
+| 1 | Can't control the Warden at all | **Fixed — and finished.** Direct control is now *gone* rather than half-working: no WASD walk, no click-to-walk. The Warden fights, drinks, explores and descends on its own. You issue orders. See §1 below |
+| 2 | Tiles render in front of characters | **Fixed.** The renderer is now two passes: all flat ground first, then everything with height, depth-sorted. A regression check records a whole frame and fails if any ground tile is painted after a raised object |
+| 3 | Mara's and Sylvie's dialogue boxes are glitchy | **Fixed — two causes found.** The option row was re-rolling a random number 8×/second (so it blinked and clicks fell through), and portrait canvases were being stolen between the dialogue box and the TOWN roster. Both fixed, both now covered by a check |
+| 4 | Continent map + region select before starting | Pending — new scope |
+| 5 | The region should be vast, not just the village | Pending — new scope |
+| 6 | Dungeon entrance outside the village | Pending — depends on 5 |
+| 7 | Travellers who trade, tavern, recruit, apply for citizenship | Pending — new scope |
+
+Three *extra* bugs were found while fixing the above and are also fixed: buildings could be placed on
+whatever map the Warden was standing on (including the dungeon), a summoning monster could crash the
+frame right after killing the Warden, and the renderer was consuming the seeded game rng (rain,
+particles, screen shake), which would have broken determinism as soon as the weather changed.
+
+**Suite: 111 → 116 checks, all green, states still byte-identical across runs.**
 
 ---
 
@@ -19,8 +43,25 @@ python3 -m http.server 8000
 
 Any static server works (`npx serve game`, `php -S localhost:8000 -t game`, …).
 
-**Controls.** Click to move. Nav bar: HERO · BAG · BUILD · TOWN · QUESTS · PETS · ☰.
-Speed buttons at the top left (❚❚ ▶ ▶▶ ▶▶▶). `F` toggles auto-explore in the dungeon.
+**Controls — there is no joystick.** You never move the Warden. What you do instead:
+
+| Input | Effect |
+|---|---|
+| Click a **villager** | The Warden walks over and talks (an order, not a walk command) |
+| Click a **building** | Use it — shop, forge, chapel, tavern |
+| Click a **chest / stairs / portal** | The Warden walks to it and uses it |
+| Click **empty ground** | Nothing. Deliberately |
+| `WASD` / arrows | **Pan the camera.** The Warden stays put |
+| `F` | Delve — send the Warden to the Hollowdeep |
+| `R` | Recall to the village |
+| `E` / `Space` / `1` `2` `3` | Talk to nearest · strike nearest · skills and potion |
+| `C I B T Q P` · `+ −` · `Esc` | Panels · game speed · close |
+
+Left alone with no input at all, the Warden strolls around the village for ~40 s, then walks to the
+Hollowdeep mouth and descends by itself. It casts, drinks below 45 % HP, opens chests, takes stairs,
+auto-sells trash, and comes home to rest after a recall. **Nothing requires your hands.**
+
+Nav bar: HERO · BAG · BUILD · TOWN · QUESTS · PETS · ☰. Speed buttons top-left (❚❚ ▶ ▶▶ ▶▶▶).
 
 ---
 
@@ -30,7 +71,7 @@ Speed buttons at the top left (❚❚ ▶ ▶▶ ▶▶▶). `F` toggles auto-ex
 node tools/smoke.js
 ```
 
-No browser needed. **111 checks**, exits non-zero on any failure, takes ~75 s.
+No browser needed. **116 checks**, exits non-zero on any failure, takes ~70 s.
 It parses the real `index.html` into a DOM tree, so a missing element fails loudly instead of
 being silently invented.
 
@@ -56,6 +97,11 @@ Press **`F9`** (or click the **BENCH** button) to open the dev test bench.
 
 ### Things worth trying
 
+0. **Do nothing.** Start a game and take your hands off the keyboard for a minute. The Warden should
+   amble around the plaza and then walk itself into the Hollowdeep. If it ever stands still for more
+   than a few seconds in the village, that is a bug — tell me.
+0b. **Look at a character's feet.** Stand the camera so a villager is on the tile *behind* a rock or
+   a patch of grass. Ground must never cover their legs now.
 1. **Jobs make the army.** Recruit nobody. Watch a farmer's STR climb (~+0.26/game day) while their
    INT never moves. A farming village literally cannot produce a Mage — you have to build and staff
    something that trains INT.
@@ -74,7 +120,10 @@ Being explicit so you do not go looking for it:
 
 - **No recruitment UI in the normal game.** Only via the bench. The TOWN panel does not list stats.
 - **No Breaches, no Retaliation raids, no Expedition Orders.** That is M2.
-- **No location select.** One map, the Vale.
+- **No travellers.** Nobody arrives, nobody applies for citizenship, the tavern has no visitors who
+  are not already villagers (finding 7).
+- **No location select, no continent map, no region choice.** One map, the Vale — and the Vale *is*
+  the village. Findings 4–6 all land here.
 - **No village rank / star progression.**
 - **Tooltips do not yet show the production breakdown** (capacity × match × adjacency × combo). The
   bench shows it; the game UI does not.
